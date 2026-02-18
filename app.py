@@ -8,11 +8,13 @@ from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 
-# Download NLTK
+# Download NLTK - FIXED
+import nltk
 try:
     nltk.data.find('tokenizers/punkt')
 except:
     nltk.download('punkt')
+    nltk.download('punkt_tab')
 
 st.set_page_config(page_title="Video Summarizer", page_icon="🎥")
 
