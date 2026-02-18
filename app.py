@@ -4,41 +4,56 @@ import tempfile
 import os
 import time
 import nltk
+import ssl
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 
-# Download NLTK - FIXED
-import nltk
+# ===== FIXED NLTK DOWNLOAD FOR STREAMLIT CLOUD =====
 try:
-    nltk.data.find('tokenizers/punkt')
-except:
-    nltk.download('punkt')
-    nltk.download('punkt_tab')
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+
+# Set NLTK data path
+nltk_data_dir = '/home/appuser/nltk_data'
+if not os.path.exists(nltk_data_dir):
+    os.makedirs(nltk_data_dir)
+
+# Add to path
+if nltk_data_dir not in nltk.data.path:
+    nltk.data.path.append(nltk_data_dir)
+
+# Download required data
+required_packages = ['punkt', 'punkt_tab']
+for package in required_packages:
+    try:
+        nltk.data.find(f'tokenizers/{package}')
+    except:
+        nltk.download(package, download_dir=nltk_data_dir, quiet=True)
+# ==================================================
 
 st.set_page_config(page_title="Video Summarizer", page_icon="🎥")
 
 st.title("🎥 Video/Audio/PDF Summarizer")
 st.write("✅ Fixed PDF + AssemblyAI")
 
-# ========== FIXED PDF FUNCTION (No pdfplumber) ==========
+# ========== PDF EXTRACTION ==========
 
 def extract_pdf_text(pdf_path):
-    """Extract text from PDF using PyPDF2 (always works)"""
+    """Extract text from PDF using PyPDF2"""
     try:
-        # Try to import PyPDF2
         import PyPDF2
         text = ""
         
-        # Open PDF file
         with open(pdf_path, 'rb') as file:
             pdf_reader = PyPDF2.PdfReader(file)
-            
-            # Show page count
             num_pages = len(pdf_reader.pages)
             st.info(f"📄 PDF has {num_pages} pages")
             
-            # Read first 5 pages only (for speed)
+            # Read first 5 pages only
             for page_num in range(min(5, num_pages)):
                 page = pdf_reader.pages[page_num]
                 page_text = page.extract_text()
@@ -48,22 +63,18 @@ def extract_pdf_text(pdf_path):
         
         if text:
             st.success(f"✅ Extracted {len(text)} characters")
-            return text[:10000]  # Limit to 10000 chars
+            return text[:10000]
         else:
             st.warning("No text found in PDF")
             return None
-            
-    except ImportError:
-        st.error("❌ PyPDF2 not installed. Please run: pip install PyPDF2")
-        return None
     except Exception as e:
         st.error(f"❌ PDF extraction failed: {e}")
         return None
 
-# ========== FIXED ASSEMBLYAI FUNCTION (with correct parameter) ==========
+# ========== ASSEMBLYAI TRANSCRIPTION ==========
 
 def transcribe_with_assemblyai(audio_path):
-    """Transcribe using AssemblyAI with correct speech_models parameter"""
+    """Transcribe using AssemblyAI"""
     try:
         headers = {'authorization': st.session_state.assemblyai_key}
         
@@ -85,12 +96,12 @@ def transcribe_with_assemblyai(audio_path):
                 st.error("No upload_url in response")
                 return None
         
-        # Request transcription with CORRECT parameter
+        # Request transcription
         with st.spinner("⏳ Requesting transcription..."):
             transcript_request = {
                 'audio_url': upload_url,
                 'language_detection': True,
-                'speech_models': ['universal-2']  # ✅ CORRECT: plural and list
+                'speech_models': ['universal-2']
             }
             
             response = requests.post(
@@ -139,76 +150,60 @@ def transcribe_with_assemblyai(audio_path):
         
         st.error("Transcription timeout")
         return None
-        
     except Exception as e:
         st.error(f"Transcription error: {e}")
         return None
 
-# ========== SUMMARIZATION FUNCTIONS ==========
+# ========== SUMMARIZATION ==========
 
 def summarize_text(text):
-    """Summarize text locally"""
+    """Summarize text"""
     if not text or len(text) < 100:
         st.warning("Text too short to summarize")
         return
     
     with st.spinner("📝 Generating summary..."):
         try:
-            # Local summarization
             parser = PlaintextParser.from_string(text, Tokenizer("english"))
             summarizer = LexRankSummarizer()
             summary = summarizer(parser.document, 3)
             summary_text = " ".join(str(s) for s in summary)
             
-            # Store in session state
             st.session_state.transcript = text
             st.session_state.summary = summary_text
             
-            # Display results
-            display_results(text, summary_text)
+            # Display
+            st.markdown("---")
+            st.markdown("## 📊 Results")
             
+            col1, col2 = st.columns(2)
+            with col1:
+                with st.expander("📄 Original Text", expanded=False):
+                    st.text(text[:500] + ("..." if len(text) > 500 else ""))
+            
+            with col2:
+                st.markdown("### 📝 Summary")
+                st.info(summary_text)
+            
+            # Download buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button("📥 Download Transcript", text, "transcript.txt")
+            with col2:
+                st.download_button("📥 Download Summary", summary_text, "summary.txt")
+            
+            # Statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Original", f"{len(text)} chars")
+            with col2:
+                st.metric("Summary", f"{len(summary_text)} chars")
+            with col3:
+                reduction = int((1 - len(summary_text)/len(text)) * 100) if len(text) > 0 else 0
+                st.metric("Reduced", f"{reduction}%")
+                
         except Exception as e:
             st.error(f"Summarization failed: {e}")
-
-def display_results(original, summary):
-    """Display results"""
-    st.markdown("---")
-    st.markdown("## 📊 Results")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        with st.expander("📄 Original Text", expanded=False):
-            st.text(original[:500] + ("..." if len(original) > 500 else ""))
-    
-    with col2:
-        st.markdown("### 📝 Summary")
-        st.info(summary)
-    
-    # Download buttons
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            "📥 Download Transcript",
-            original,
-            file_name="transcript.txt"
-        )
-    with col2:
-        st.download_button(
-            "📥 Download Summary", 
-            summary,
-            file_name="summary.txt"
-        )
-    
-    # Statistics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Original Length", f"{len(original)} chars")
-    with col2:
-        st.metric("Summary Length", f"{len(summary)} chars")
-    with col3:
-        reduction = int((1 - len(summary)/len(original)) * 100) if len(original) > 0 else 0
-        st.metric("Reduced", f"{reduction}%")
 
 def process_file(uploaded_file):
     """Process uploaded file"""
@@ -249,21 +244,22 @@ def process_file(uploaded_file):
             status.update(label="❌ Error!", state="error")
             st.error(f"Error: {str(e)}")
 
-# ========== UI CODE ==========
+# ========== UI ==========
 
 # Initialize session state
 if 'assemblyai_key' not in st.session_state:
     st.session_state.assemblyai_key = ''
-if 'hf_token' not in st.session_state:
-    st.session_state.hf_token = ''
 
 # Sidebar
 with st.sidebar:
     st.header("🔑 API Keys")
     
+    # Try to get from secrets first
+    default_key = st.secrets.get("ASSEMBLYAI_KEY", "") if hasattr(st, 'secrets') else ""
+    
     assembly_key = st.text_input(
         "AssemblyAI Key",
-        value=st.session_state.assemblyai_key,
+        value=st.session_state.assemblyai_key or default_key,
         type="password"
     )
     
@@ -296,10 +292,10 @@ if uploaded_file:
     
     # Process button
     if st.button("🚀 Process File", type="primary", use_container_width=True):
-        if not st.session_state.assemblyai_key:
-            st.error("❌ Please enter AssemblyAI Key")
+        if not st.session_state.assemblyai_key and file_ext not in ['pdf', 'txt']:
+            st.error("❌ Please enter AssemblyAI Key for audio/video files")
         else:
             process_file(uploaded_file)
 
 st.markdown("---")
-st.caption("Made with ❤️ using Streamlit | PDF + AssemblyAI Fixed")
+st.caption("Made with ❤️ using Streamlit | Fixed for Streamlit Cloud")
