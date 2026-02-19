@@ -17,6 +17,8 @@ import ssl
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import validators
+import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # Download NLTK data
 try:
@@ -92,7 +94,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-header'><h1>🎯 Universal Summarizer</h1><p>Video | Audio | PDF | Text | URL</p></div>", unsafe_allow_html=True)
+st.markdown("<div class='main-header'><h1>🎯 Universal Summarizer</h1><p>Video | Audio | PDF | Text | URL | YouTube</p></div>", unsafe_allow_html=True)
 
 # Initialize session state
 if 'assemblyai_key' not in st.session_state:
@@ -118,6 +120,7 @@ with st.sidebar:
     st.markdown("🎵 Audio: MP3, WAV, M4A")
     st.markdown("📄 PDF, TXT")
     st.markdown("🌐 URLs")
+    st.markdown("▶️ YouTube")
 
 # ========== PDF EXTRACTION ==========
 def extract_pdf_text(pdf_path):
@@ -133,7 +136,7 @@ def extract_pdf_text(pdf_path):
     except:
         return None, 0
 
-# ========== IMPROVED URL EXTRACTION (No Footer/Copyright) ==========
+# ========== CLEAN URL EXTRACTION ==========
 def extract_clean_from_url(url):
     """Extract ONLY main content, no ads/footer/copyright"""
     try:
@@ -196,6 +199,59 @@ def extract_clean_from_url(url):
         return None, None
     except Exception as e:
         st.error(f"URL extraction error: {e}")
+        return None, None
+
+# ========== YOUTUBE EXTRACTION ==========
+def extract_youtube_content(url):
+    """Extract actual content from YouTube video"""
+    try:
+        # Extract video ID
+        video_id = None
+        if 'youtube.com/watch?v=' in url:
+            video_id = url.split('watch?v=')[-1].split('&')[0]
+        elif 'youtu.be/' in url:
+            video_id = url.split('youtu.be/')[-1].split('?')[0]
+        
+        if not video_id:
+            return None, None
+        
+        # METHOD 1: Try to get transcript (if captions available)
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # Try Telugu first, then English, then Hindi
+            for lang in ['te', 'en', 'hi']:
+                try:
+                    transcript = transcript_list.find_transcript([lang])
+                    transcript_data = transcript.fetch()
+                    
+                    # Convert to text
+                    full_text = ' '.join([item['text'] for item in transcript_data])
+                    
+                    # Get video title
+                    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        title = info.get('title', 'YouTube Video')
+                    
+                    return full_text, f"YouTube: {title} (Captions)"
+                except:
+                    continue
+        except:
+            pass
+        
+        # METHOD 2: If no transcript, try to get description as fallback
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = info.get('title', 'YouTube Video')
+            description = info.get('description', '')
+            
+            if description and len(description) > 100:
+                return description, f"YouTube: {title} (Description)"
+        
+        return None, "No captions or description available"
+        
+    except Exception as e:
+        st.error(f"YouTube extraction error: {e}")
         return None, None
 
 # ========== ASSEMBLYAI TRANSCRIPTION ==========
@@ -295,7 +351,7 @@ def generate_summary(text, num_points=5):
     
     return summary, len(sentences)
 
-# ========== DISPLAY RESULTS WITH SENTENCE CONTROL ==========
+# ========== DISPLAY RESULTS ==========
 def display_results(text, source_name):
     # Sentence count
     total_sentences = len(nltk.sent_tokenize(text))
@@ -368,7 +424,7 @@ def display_results(text, source_name):
 
 # ========== MAIN UI ==========
 def main():
-    tab1, tab2, tab3, tab4 = st.tabs(["📁 File Upload", "🌐 URL", "📝 Paste Text", "ℹ️ Help"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📁 File Upload", "🌐 URL/YouTube", "📝 Paste Text", "ℹ️ Help"])
     
     with tab1:
         uploaded_file = st.file_uploader(
@@ -413,14 +469,25 @@ def main():
                     os.unlink(path)
     
     with tab2:
-        url = st.text_input("Enter URL", placeholder="https://example.com/article")
-        if url and st.button("🌐 Fetch Clean Content"):
-            if validators.url(url):
+        st.markdown("### Enter URL (Article or YouTube)")
+        url = st.text_input("", placeholder="https://example.com/article or https://youtube.com/watch?v=...")
+        
+        if url and st.button("🌐 Fetch Content"):
+            # Check if it's a YouTube URL
+            if 'youtube.com' in url or 'youtu.be' in url:
+                with st.spinner("📹 Fetching YouTube content..."):
+                    text, title = extract_youtube_content(url)
+                    if text:
+                        st.success(f"✅ {title}")
+                        st.info(f"📊 Extracted {len(text)} characters, {len(text.split())} words")
+                        display_results(text, "youtube")
+                    else:
+                        st.warning("⚠️ No transcript available. Try downloading the video and uploading directly.")
+            elif validators.url(url):
                 with st.spinner("Fetching clean content..."):
                     text, title = extract_clean_from_url(url)
                     if text and len(text) > 100:
                         st.success(f"✅ Fetched: {title}")
-                        st.info(f"📊 Extracted {len(text)} characters, {len(text.split())} words")
                         display_results(text, "web")
                     else:
                         st.warning("⚠️ No readable content found at this URL")
@@ -447,19 +514,19 @@ def main():
                 <li><strong>Download:</strong> Get text, summary, or audio</li>
             </ol>
             
-            <h3>✨ New Features</h3>
+            <h3>✨ Features</h3>
             <ul>
-                <li>✅ <strong>Clean URL extraction</strong> - No footer/copyright text</li>
-                <li>✅ <strong>Sentence slider</strong> - Control summary length (3-30 sentences)</li>
-                <li>✅ <strong>Better statistics</strong> - Shows reduction percentage</li>
+                <li>✅ <strong>YouTube Support</strong> - Extracts captions/description</li>
+                <li>✅ <strong>Clean URLs</strong> - No footer/copyright text</li>
+                <li>✅ <strong>Sentence slider</strong> - Control summary length</li>
                 <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
             </ul>
             
-            <h3>🌐 URL Tips</h3>
+            <h3>▶️ YouTube Tips</h3>
             <ul>
-                <li>Works best with news articles, blogs, and text-based pages</li>
-                <li>Automatically removes ads, navigation, and copyright text</li>
-                <li>For YouTube, download video and upload directly for transcription</li>
+                <li>Works best with videos that have captions</li>
+                <li>If no captions, shows video description</li>
+                <li>For best results, download video and upload directly</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
