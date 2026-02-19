@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 import validators
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
+import edge_tts
+import asyncio
 
 # Download NLTK data
 try:
@@ -307,18 +309,42 @@ def transcribe_with_assemblyai(audio_path):
         st.error(f"Transcription error: {e}")
         return None
 
-# ========== TEXT TO SPEECH ==========
-def text_to_speech(text, lang='en'):
+# ========== NORMAL VOICE TEXT TO SPEECH (ADDED) ==========
+def text_to_speech_normal(text, voice_type="clear"):
+    """Convert text to normal, clear voice using Edge TTS"""
     try:
-        if not text or len(text.strip()) == 0:
-            return None
+        # Clear, natural voice options
+        voices = {
+            "clear": "en-US-JennyNeural",      # Clear American female
+            "indian": "en-IN-NeerjaNeural",    # Indian female
+            "telugu": "te-IN-ShrutiNeural",    # Telugu female
+            "british": "en-GB-SoniaNeural",    # British female
+            "male": "en-US-GuyNeural"          # American male
+        }
         
-        text_for_audio = text[:1000] if len(text) > 1000 else text
-        tts = gTTS(text=text_for_audio, lang=lang, slow=False)
-        audio_bytes = io.BytesIO()
-        tts.write_to_fp(audio_bytes)
-        audio_bytes.seek(0)
+        selected_voice = voices.get(voice_type, "en-US-JennyNeural")
+        text_to_speak = text[:1000] if len(text) > 1000 else text
+        
+        async def generate():
+            communicate = edge_tts.Communicate(text_to_speak, selected_voice)
+            await communicate.save("normal_voice.mp3")
+        
+        # Run async function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(generate())
+        loop.close()
+        
+        # Read audio file
+        with open("normal_voice.mp3", "rb") as f:
+            audio_bytes = f.read()
+        
+        # Clean up
+        if os.path.exists("normal_voice.mp3"):
+            os.remove("normal_voice.mp3")
+        
         return audio_bytes
+        
     except Exception as e:
         st.warning(f"⚠️ Audio generation failed: {e}")
         return None
@@ -350,7 +376,7 @@ def generate_summary(text, num_points=5):
     
     return summary, len(sentences)
 
-# ========== DISPLAY RESULTS WITH FIXED SLIDER ==========
+# ========== DISPLAY RESULTS WITH NORMAL VOICE ==========
 def display_results(text, source_name):
     # Sentence count
     total_sentences = len(nltk.sent_tokenize(text))
@@ -408,7 +434,7 @@ def display_results(text, source_name):
             reduction = 0
         st.metric("Reduced", f"{reduction}%")
     
-    # Download section
+    # Download section with NORMAL VOICE
     st.markdown("### 📥 Downloads")
     col1, col2, col3, col4 = st.columns(4)
     
@@ -419,10 +445,34 @@ def display_results(text, source_name):
         st.download_button("📝 Summary", summary, f"{source_name}_summary.txt")
     
     with col3:
-        audio = text_to_speech(summary)
+        # Voice selector for normal voice
+        voice_option = st.selectbox(
+            "Voice Style",
+            ["Clear English", "Indian English", "Telugu", "British", "American Male"],
+            key=f"voice_{source_name}"
+        )
+        
+        voice_map = {
+            "Clear English": "clear",
+            "Indian English": "indian",
+            "Telugu": "telugu",
+            "British": "british",
+            "American Male": "male"
+        }
+        
+        # Generate normal voice audio
+        audio = text_to_speech_normal(summary, voice_map[voice_option])
         if audio:
             st.audio(audio, format='audio/mp3')
-            st.download_button("🔊 Audio", audio, f"{source_name}_audio.mp3", "audio/mp3")
+            st.download_button(
+                "🔊 Download Audio",
+                audio,
+                file_name="summary_audio.mp3",
+                mime="audio/mp3",
+                use_container_width=True
+            )
+        else:
+            st.warning("Audio not available")
     
     with col4:
         if st.button("🔗 Share"):
@@ -530,11 +580,12 @@ def main():
                 <li><strong>Get API Key:</strong> Sign up at <a href='https://www.assemblyai.com/' target='_blank'>AssemblyAI</a> (Free - 10 hours/month)</li>
                 <li><strong>Choose Input:</strong> Upload file, paste URL, or enter text</li>
                 <li><strong>Adjust Sentences:</strong> Use slider to control summary length</li>
-                <li><strong>Download:</strong> Get text, summary, or audio</li>
+                <li><strong>Download:</strong> Get text, summary, or audio with normal voice</li>
             </ol>
             
             <h3>✨ Features</h3>
             <ul>
+                <li>✅ <strong>Normal Voice</strong> - Clear, natural audio</li>
                 <li>✅ <strong>YouTube Support</strong> - Extracts captions/description</li>
                 <li>✅ <strong>Clean URLs</strong> - No footer/copyright text</li>
                 <li>✅ <strong>Sentence slider</strong> - Control summary length</li>
@@ -542,11 +593,13 @@ def main():
                 <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
             </ul>
             
-            <h3>▶️ YouTube Tips</h3>
+            <h3>🎤 Voice Options</h3>
             <ul>
-                <li>Works best with videos that have captions</li>
-                <li>If no captions, shows video description</li>
-                <li>For best results, download video and upload directly</li>
+                <li><strong>Clear English</strong> - American female, crystal clear</li>
+                <li><strong>Indian English</strong> - Indian female, natural accent</li>
+                <li><strong>Telugu</strong> - Telugu language female voice</li>
+                <li><strong>British</strong> - British female, elegant</li>
+                <li><strong>American Male</strong> - Deep male voice</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
