@@ -9,3 +9,4 @@ sumy
 yt-dlp
 youtube-transcript-api
 edge-tts
+sumy
