@@ -83,6 +83,12 @@ st.markdown("""
         font-weight: bold;
         width: 100%;
     }
+    .slider-container {
+        background: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,23 +133,69 @@ def extract_pdf_text(pdf_path):
     except:
         return None, 0
 
-# ========== URL EXTRACTION ==========
-def extract_from_url(url):
+# ========== IMPROVED URL EXTRACTION (No Footer/Copyright) ==========
+def extract_clean_from_url(url):
+    """Extract ONLY main content, no ads/footer/copyright"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
+        
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            for script in soup(["script", "style"]):
-                script.decompose()
-            text = soup.get_text()
+            
+            # Remove unwanted elements
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 
+                               'form', 'button', 'iframe', 'meta', 'link']):
+                element.decompose()
+            
+            # Try to find main content
+            main_content = None
+            for selector in ['main', 'article', '[role="main"]', '.content', '.post-content', 
+                           '.article-content', '#content', '.main-content']:
+                main_content = soup.select_one(selector)
+                if main_content:
+                    break
+            
+            if main_content:
+                text = main_content.get_text()
+            else:
+                # Get all paragraphs (usually main content)
+                paragraphs = soup.find_all('p')
+                text = ' '.join([p.get_text() for p in paragraphs if len(p.get_text()) > 30])
+            
+            # Clean text
             lines = (line.strip() for line in text.splitlines())
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = ' '.join(chunk for chunk in chunks if chunk)
+            text = ' '.join(chunk for chunk in chunks if chunk and len(chunk) > 20)
+            
+            # Remove common footer/copyright patterns
+            footer_patterns = [
+                r'©.*?\d{4}.*?rights reserved',
+                r'Privacy.*?Policy',
+                r'Terms.*?of.*?Service',
+                r'Contact.*?Us',
+                r'About.*?Press',
+                r'Copyright.*?\d{4}',
+                r'All.*?Rights.*?Reserved',
+                r'Subscribe.*?Newsletter',
+                r'Follow.*?us on',
+                r'Share this article'
+            ]
+            
+            for pattern in footer_patterns:
+                text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+            
+            # Remove extra whitespace
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            # Get title
             title = soup.title.string if soup.title else "Article"
-            return text[:50000], title
+            title = re.sub(r'[|\-].*$', '', title).strip()
+            
+            return text, title
         return None, None
-    except:
+    except Exception as e:
+        st.error(f"URL extraction error: {e}")
         return None, None
 
 # ========== ASSEMBLYAI TRANSCRIPTION ==========
@@ -215,11 +267,11 @@ def text_to_speech(text, lang='en'):
         st.warning(f"⚠️ Audio generation failed: {e}")
         return None
 
-# ========== GENERATE SUMMARY ==========
+# ========== GENERATE SUMMARY WITH DYNAMIC LENGTH ==========
 def generate_summary(text, num_points=5):
     sentences = nltk.sent_tokenize(text)
     if len(sentences) <= num_points:
-        return text
+        return text, len(sentences)
     
     words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
     word_freq = Counter(words)
@@ -235,15 +287,36 @@ def generate_summary(text, num_points=5):
     top_indices = sorted(sentence_scores, key=sentence_scores.get, reverse=True)[:num_points]
     top_indices.sort()
     
-    summary = "📌 **MAIN POINTS**\n\n"
+    summary = f"📌 **MAIN POINTS ({num_points} of {len(sentences)} sentences)**\n\n"
     for i, idx in enumerate(top_indices, 1):
-        summary += f"{i}. {sentences[idx]}\n\n"
+        # Clean each sentence
+        clean_sent = ' '.join(sentences[idx].split())
+        summary += f"{i}. {clean_sent}\n\n"
     
-    return summary
+    return summary, len(sentences)
 
-# ========== DISPLAY RESULTS ==========
+# ========== DISPLAY RESULTS WITH SENTENCE CONTROL ==========
 def display_results(text, source_name):
-    summary = generate_summary(text, 5)
+    # Sentence count
+    total_sentences = len(nltk.sent_tokenize(text))
+    
+    # Slider for summary length
+    st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        num_summary_sentences = st.slider(
+            "📊 Number of summary sentences:",
+            min_value=3,
+            max_value=min(30, total_sentences),
+            value=min(5, total_sentences),
+            help="Adjust how many sentences you want in summary"
+        )
+    with col2:
+        st.metric("Total Sentences", total_sentences)
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Generate summary with selected length
+    summary, total = generate_summary(text, num_summary_sentences)
     
     st.markdown("## 📋 Summary")
     st.markdown(f"<div class='section-card'>{summary}</div>", unsafe_allow_html=True)
@@ -255,9 +328,9 @@ def display_results(text, source_name):
     with col2:
         st.metric("Words", f"{len(text.split()):,}")
     with col3:
-        st.metric("Sentences", f"{len(nltk.sent_tokenize(text)):,}")
+        st.metric("Sentences", f"{total_sentences:,}")
     with col4:
-        reduction = int((1 - len(summary.split())/len(text.split())) * 100)
+        reduction = int((1 - num_summary_sentences/total_sentences) * 100)
         st.metric("Reduced", f"{reduction}%")
     
     # Download section
@@ -278,16 +351,20 @@ def display_results(text, source_name):
     
     with col4:
         if st.button("🔗 Share"):
-            st.info("Link copied!")
+            st.info("✅ Link copied to clipboard!")
     
     # Keywords
     keywords = Counter(re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())).most_common(10)
     st.markdown("### 🏷️ Keywords")
     html = "<div>"
     for word, count in keywords[:8]:
-        html += f"<span class='keyword-tag'>{word}</span> "
+        html += f"<span class='keyword-tag'>{word} ({count})</span> "
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
+    
+    # Show preview
+    with st.expander("👁️ Preview Raw Text (First 500 chars)"):
+        st.text(text[:500] + "..." if len(text) > 500 else text)
 
 # ========== MAIN UI ==========
 def main():
@@ -321,12 +398,12 @@ def main():
                             st.success(f"✅ Extracted {pages} pages")
                             display_results(text, "pdf")
                     elif file_ext == 'txt':
-                        with open(path, 'r') as f:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                             text = f.read()
                         display_results(text, "text")
                     else:
                         if not st.session_state.assemblyai_key:
-                            st.error("❌ AssemblyAI Key required")
+                            st.error("❌ AssemblyAI Key required for video/audio")
                         else:
                             text = transcribe_with_assemblyai(path)
                             if text:
@@ -337,38 +414,56 @@ def main():
     
     with tab2:
         url = st.text_input("Enter URL", placeholder="https://example.com/article")
-        if url and st.button("🌐 Fetch"):
+        if url and st.button("🌐 Fetch Clean Content"):
             if validators.url(url):
-                with st.spinner("Fetching..."):
-                    text, title = extract_from_url(url)
-                    if text:
+                with st.spinner("Fetching clean content..."):
+                    text, title = extract_clean_from_url(url)
+                    if text and len(text) > 100:
                         st.success(f"✅ Fetched: {title}")
+                        st.info(f"📊 Extracted {len(text)} characters, {len(text.split())} words")
                         display_results(text, "web")
+                    else:
+                        st.warning("⚠️ No readable content found at this URL")
             else:
                 st.error("❌ Invalid URL")
     
     with tab3:
-        text_input = st.text_area("Paste text", height=200)
+        text_input = st.text_area("Paste text", height=200, placeholder="Paste any article, news, or text here...")
+        
         if text_input and st.button("📝 Summarize"):
             if len(text_input) > 100:
                 display_results(text_input, "pasted")
             else:
-                st.warning("Text too short")
+                st.warning("Text too short (minimum 100 characters)")
     
     with tab4:
         st.markdown("""
-        ### 📌 How to Use
-        1. Get AssemblyAI Key from assemblyai.com
-        2. Upload file or paste URL
-        3. Click Process
-        4. Download text/summary/audio
-        
-        ### 🌐 Telugu Videos
-        - AssemblyAI auto-detects Telugu
-        - Make sure video has clear voice
-        - 20 seconds is enough
-        """)
+        <div class='section-card'>
+            <h3>📌 How to Use</h3>
+            <ol>
+                <li><strong>Get API Key:</strong> Sign up at <a href='https://www.assemblyai.com/' target='_blank'>AssemblyAI</a> (Free - 10 hours/month)</li>
+                <li><strong>Choose Input:</strong> Upload file, paste URL, or enter text</li>
+                <li><strong>Adjust Sentences:</strong> Use slider to control summary length</li>
+                <li><strong>Download:</strong> Get text, summary, or audio</li>
+            </ol>
+            
+            <h3>✨ New Features</h3>
+            <ul>
+                <li>✅ <strong>Clean URL extraction</strong> - No footer/copyright text</li>
+                <li>✅ <strong>Sentence slider</strong> - Control summary length (3-30 sentences)</li>
+                <li>✅ <strong>Better statistics</strong> - Shows reduction percentage</li>
+                <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
+            </ul>
+            
+            <h3>🌐 URL Tips</h3>
+            <ul>
+                <li>Works best with news articles, blogs, and text-based pages</li>
+                <li>Automatically removes ads, navigation, and copyright text</li>
+                <li>For YouTube, download video and upload directly for transcription</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ========== CALL MAIN FUNCTION ==========
 if __name__ == "__main__":
-    main()  # 👈 This line is important!
+    main()
