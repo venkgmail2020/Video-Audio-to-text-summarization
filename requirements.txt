@@ -5,7 +5,6 @@ PyPDF2
 gtts
 validators
 beautifulsoup4
-sumy
 yt-dlp
 youtube-transcript-api
 edge-tts
