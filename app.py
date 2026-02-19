@@ -163,7 +163,7 @@ def transcribe_with_assemblyai(audio_path):
         # Transcribe with Telugu support
         transcript_request = {
             'audio_url': upload_url,
-            'language_detection': True,  # Auto detects Telugu
+            'language_detection': True,
             'speech_models': ['universal-2']
         }
         
@@ -201,14 +201,11 @@ def transcribe_with_assemblyai(audio_path):
 
 # ========== TEXT TO SPEECH ==========
 def text_to_speech(text, lang='en'):
-    """Convert to audio - FIXED VERSION"""
     try:
         if not text or len(text.strip()) == 0:
             return None
         
-        # Limit text length
         text_for_audio = text[:1000] if len(text) > 1000 else text
-        
         tts = gTTS(text=text_for_audio, lang=lang, slow=False)
         audio_bytes = io.BytesIO()
         tts.write_to_fp(audio_bytes)
@@ -244,7 +241,7 @@ def generate_summary(text, num_points=5):
     
     return summary
 
-# ========== DISPLAY RESULTS WITH AUDIO ==========
+# ========== DISPLAY RESULTS ==========
 def display_results(text, source_name):
     summary = generate_summary(text, 5)
     
@@ -263,7 +260,7 @@ def display_results(text, source_name):
         reduction = int((1 - len(summary.split())/len(text.split())) * 100)
         st.metric("Reduced", f"{reduction}%")
     
-    # DOWNLOAD SECTION - 4 BUTTONS
+    # Download section
     st.markdown("### 📥 Downloads")
     col1, col2, col3, col4 = st.columns(4)
     
@@ -274,18 +271,10 @@ def display_results(text, source_name):
         st.download_button("📝 Summary", summary, f"{source_name}_summary.txt")
     
     with col3:
-        # 🔥 AUDIO BUTTON - FIXED
         audio = text_to_speech(summary)
         if audio:
             st.audio(audio, format='audio/mp3')
-            st.download_button(
-                "🔊 Download Audio",
-                audio,
-                f"{source_name}_audio.mp3",
-                "audio/mp3"
-            )
-        else:
-            st.warning("Audio not available")
+            st.download_button("🔊 Audio", audio, f"{source_name}_audio.mp3", "audio/mp3")
     
     with col4:
         if st.button("🔗 Share"):
@@ -301,83 +290,85 @@ def display_results(text, source_name):
     st.markdown(html, unsafe_allow_html=True)
 
 # ========== MAIN UI ==========
-tab1, tab2, tab3, tab4 = st.tabs(["📁 File Upload", "🌐 URL", "📝 Paste Text", "ℹ️ Help"])
-
-with tab1:
-    uploaded_file = st.file_uploader(
-        "Choose file",
-        type=['mp4', 'avi', 'mov', 'mp3', 'wav', 'm4a', 'pdf', 'txt']
-    )
+def main():
+    tab1, tab2, tab3, tab4 = st.tabs(["📁 File Upload", "🌐 URL", "📝 Paste Text", "ℹ️ Help"])
     
-    if uploaded_file:
-        file_ext = uploaded_file.name.split('.')[-1].lower()
-        file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
-        st.info(f"📊 {uploaded_file.name} | {file_size:.2f} MB")
+    with tab1:
+        uploaded_file = st.file_uploader(
+            "Choose file",
+            type=['mp4', 'avi', 'mov', 'mp3', 'wav', 'm4a', 'pdf', 'txt']
+        )
         
-        if file_ext in ['mp4', 'avi', 'mov']:
-            st.video(uploaded_file)
-        elif file_ext in ['mp3', 'wav', 'm4a']:
-            st.audio(uploaded_file)
-        
-        if st.button("🚀 Process"):
-            with st.spinner("Processing..."):
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    path = tmp.name
-                
-                if file_ext == 'pdf':
-                    text, pages = extract_pdf_text(path)
-                    if text:
-                        st.success(f"✅ Extracted {pages} pages")
-                        display_results(text, "pdf")
-                elif file_ext == 'txt':
-                    with open(path, 'r') as f:
-                        text = f.read()
-                    display_results(text, "text")
-                else:
-                    if not st.session_state.assemblyai_key:
-                        st.error("❌ AssemblyAI Key required")
-                    else:
-                        text = transcribe_with_assemblyai(path)
+        if uploaded_file:
+            file_ext = uploaded_file.name.split('.')[-1].lower()
+            file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
+            st.info(f"📊 {uploaded_file.name} | {file_size:.2f} MB")
+            
+            if file_ext in ['mp4', 'avi', 'mov']:
+                st.video(uploaded_file)
+            elif file_ext in ['mp3', 'wav', 'm4a']:
+                st.audio(uploaded_file)
+            
+            if st.button("🚀 Process"):
+                with st.spinner("Processing..."):
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                        tmp.write(uploaded_file.getvalue())
+                        path = tmp.name
+                    
+                    if file_ext == 'pdf':
+                        text, pages = extract_pdf_text(path)
                         if text:
-                            st.success(f"✅ Transcribed: {len(text)} chars")
-                            display_results(text, "media")
-                
-                os.unlink(path)
-
-with tab2:
-    url = st.text_input("Enter URL", placeholder="https://example.com/article")
-    if url and st.button("🌐 Fetch"):
-        if validators.url(url):
-            with st.spinner("Fetching..."):
-                text, title = extract_from_url(url)
-                if text:
-                    st.success(f"✅ Fetched: {title}")
-                    display_results(text, "web")
-        else:
-            st.error("❌ Invalid URL")
-
-with tab3:
-    text_input = st.text_area("Paste text", height=200)
-    if text_input and st.button("📝 Summarize"):
-        if len(text_input) > 100:
-            display_results(text_input, "pasted")
-        else:
-            st.warning("Text too short")
-
-with tab4:
-    st.markdown("""
-    ### 📌 How to Use
-    1. Get AssemblyAI Key from assemblyai.com
-    2. Upload file or paste URL
-    3. Click Process
-    4. Download text/summary/audio
+                            st.success(f"✅ Extracted {pages} pages")
+                            display_results(text, "pdf")
+                    elif file_ext == 'txt':
+                        with open(path, 'r') as f:
+                            text = f.read()
+                        display_results(text, "text")
+                    else:
+                        if not st.session_state.assemblyai_key:
+                            st.error("❌ AssemblyAI Key required")
+                        else:
+                            text = transcribe_with_assemblyai(path)
+                            if text:
+                                st.success(f"✅ Transcribed: {len(text)} chars")
+                                display_results(text, "media")
+                    
+                    os.unlink(path)
     
-    ### 🌐 Telugu Videos
-    - AssemblyAI auto-detects Telugu
-    - Make sure video has clear voice
-    - 20 seconds is enough
-    """)
+    with tab2:
+        url = st.text_input("Enter URL", placeholder="https://example.com/article")
+        if url and st.button("🌐 Fetch"):
+            if validators.url(url):
+                with st.spinner("Fetching..."):
+                    text, title = extract_from_url(url)
+                    if text:
+                        st.success(f"✅ Fetched: {title}")
+                        display_results(text, "web")
+            else:
+                st.error("❌ Invalid URL")
+    
+    with tab3:
+        text_input = st.text_area("Paste text", height=200)
+        if text_input and st.button("📝 Summarize"):
+            if len(text_input) > 100:
+                display_results(text_input, "pasted")
+            else:
+                st.warning("Text too short")
+    
+    with tab4:
+        st.markdown("""
+        ### 📌 How to Use
+        1. Get AssemblyAI Key from assemblyai.com
+        2. Upload file or paste URL
+        3. Click Process
+        4. Download text/summary/audio
+        
+        ### 🌐 Telugu Videos
+        - AssemblyAI auto-detects Telugu
+        - Make sure video has clear voice
+        - 20 seconds is enough
+        """)
 
+# ========== CALL MAIN FUNCTION ==========
 if __name__ == "__main__":
-    main()
+    main()  # 👈 This line is important!
