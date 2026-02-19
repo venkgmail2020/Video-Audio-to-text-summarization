@@ -17,6 +17,8 @@ import ssl
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import validators
+import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # Download NLTK data
 try:
@@ -89,16 +91,23 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
     }
+    .warning-box {
+        background: #fff3cd;
+        border: 1px solid #ffc107;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-header'><h1>🎯 Universal Summarizer</h1><p>Video | Audio | PDF | Text | URL</p></div>", unsafe_allow_html=True)
+st.markdown("<div class='main-header'><h1>🎯 Universal Summarizer</h1><p>Video | Audio | PDF | Text | URL | YouTube</p></div>", unsafe_allow_html=True)
 
 # Initialize session state
 if 'assemblyai_key' not in st.session_state:
     st.session_state.assemblyai_key = ''
-if 'summary' not in st.session_state:
-    st.session_state.summary = ''
+if 'processed_data' not in st.session_state:
+    st.session_state.processed_data = {}
 
 # Sidebar
 with st.sidebar:
@@ -106,7 +115,8 @@ with st.sidebar:
     assembly_key = st.text_input(
         "AssemblyAI Key",
         value=st.session_state.assemblyai_key,
-        type="password"
+        type="password",
+        help="Required for YouTube videos without captions"
     )
     if st.button("💾 Save Keys", use_container_width=True):
         st.session_state.assemblyai_key = assembly_key
@@ -117,7 +127,8 @@ with st.sidebar:
     st.markdown("🎥 Video: MP4, AVI, MOV")
     st.markdown("🎵 Audio: MP3, WAV, M4A")
     st.markdown("📄 PDF, TXT")
-    st.markdown("🌐 URLs")
+    st.markdown("🌐 Articles")
+    st.markdown("▶️ YouTube (auto-transcribe)")
 
 # ========== PDF EXTRACTION ==========
 def extract_pdf_text(pdf_path):
@@ -130,73 +141,116 @@ def extract_pdf_text(pdf_path):
                 if page_text:
                     text += page_text + "\n\n"
         return text, len(pdf_reader.pages)
-    except:
+    except Exception as e:
+        st.error(f"PDF error: {e}")
         return None, 0
 
-# ========== IMPROVED URL EXTRACTION (No Footer/Copyright) ==========
-def extract_clean_from_url(url):
-    """Extract ONLY main content, no ads/footer/copyright"""
+# ========== ARTICLE URL EXTRACTION ==========
+def extract_article_from_url(url):
+    """Extract article content from URL"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # Remove unwanted elements
-            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 
-                               'form', 'button', 'iframe', 'meta', 'link']):
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
                 element.decompose()
-            
-            # Try to find main content
-            main_content = None
-            for selector in ['main', 'article', '[role="main"]', '.content', '.post-content', 
-                           '.article-content', '#content', '.main-content']:
-                main_content = soup.select_one(selector)
-                if main_content:
-                    break
-            
-            if main_content:
-                text = main_content.get_text()
-            else:
-                # Get all paragraphs (usually main content)
-                paragraphs = soup.find_all('p')
-                text = ' '.join([p.get_text() for p in paragraphs if len(p.get_text()) > 30])
-            
-            # Clean text
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = ' '.join(chunk for chunk in chunks if chunk and len(chunk) > 20)
-            
-            # Remove common footer/copyright patterns
-            footer_patterns = [
-                r'©.*?\d{4}.*?rights reserved',
-                r'Privacy.*?Policy',
-                r'Terms.*?of.*?Service',
-                r'Contact.*?Us',
-                r'About.*?Press',
-                r'Copyright.*?\d{4}',
-                r'All.*?Rights.*?Reserved',
-                r'Subscribe.*?Newsletter',
-                r'Follow.*?us on',
-                r'Share this article'
-            ]
-            
-            for pattern in footer_patterns:
-                text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-            
-            # Remove extra whitespace
-            text = re.sub(r'\s+', ' ', text).strip()
             
             # Get title
             title = soup.title.string if soup.title else "Article"
             title = re.sub(r'[|\-].*$', '', title).strip()
             
-            return text, title
+            # Get all paragraphs
+            paragraphs = soup.find_all('p')
+            text = ' '.join([p.get_text() for p in paragraphs if len(p.get_text()) > 40])
+            
+            # Clean text
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            if text and len(text) > 200:
+                return text, title
         return None, None
     except Exception as e:
         st.error(f"URL extraction error: {e}")
         return None, None
+
+# ========== YOUTUBE HANDLER ==========
+def extract_youtube_content(url):
+    """Extract content from YouTube video"""
+    try:
+        # Extract video ID
+        video_id = None
+        if 'youtube.com/watch?v=' in url:
+            video_id = url.split('watch?v=')[-1].split('&')[0]
+        elif 'youtu.be/' in url:
+            video_id = url.split('youtu.be/')[-1].split('?')[0]
+        
+        if not video_id:
+            return None, None, "Invalid YouTube URL"
+        
+        # METHOD 1: Try to get captions
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # Try languages in order
+            for lang in ['te', 'en', 'hi']:
+                try:
+                    transcript = transcript_list.find_transcript([lang])
+                    transcript_data = transcript.fetch()
+                    full_text = ' '.join([item['text'] for item in transcript_data])
+                    
+                    # Get video title
+                    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        title = info.get('title', 'YouTube Video')
+                    
+                    return full_text, f"YouTube: {title} (Captions)", None
+                except:
+                    continue
+        except:
+            pass
+        
+        # METHOD 2: Download and transcribe with AssemblyAI
+        if not st.session_state.assemblyai_key:
+            return None, None, "No captions found. AssemblyAI Key required for transcription"
+        
+        with st.spinner("📥 Downloading audio from YouTube..."):
+            # Download audio
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'outtmpl': 'youtube_audio.%(ext)s',
+                'quiet': True
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get('title', 'YouTube Video')
+            
+            audio_path = 'youtube_audio.mp3'
+            
+            # Transcribe with AssemblyAI
+            st.info("🎤 Transcribing audio with AssemblyAI...")
+            text = transcribe_with_assemblyai(audio_path)
+            
+            # Clean up
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            
+            if text:
+                return text, f"YouTube: {title} (Transcribed)", None
+            else:
+                return None, None, "Transcription failed. Audio might be silent or API error."
+        
+    except Exception as e:
+        return None, None, f"YouTube error: {str(e)}"
 
 # ========== ASSEMBLYAI TRANSCRIPTION ==========
 def transcribe_with_assemblyai(audio_path):
@@ -212,7 +266,7 @@ def transcribe_with_assemblyai(audio_path):
             )
         upload_url = response.json()['upload_url']
         
-        # Transcribe with Telugu support
+        # Transcribe
         transcript_request = {
             'audio_url': upload_url,
             'language_detection': True,
@@ -228,8 +282,10 @@ def transcribe_with_assemblyai(audio_path):
         
         # Poll for result
         progress = st.progress(0)
+        status = st.empty()
+        
         for i in range(60):
-            time.sleep(2)
+            status.text(f"⏳ Transcribing... {i*2}s")
             progress.progress(min(i * 2, 95))
             
             response = requests.get(
@@ -239,12 +295,13 @@ def transcribe_with_assemblyai(audio_path):
             result = response.json()
             
             if result['status'] == 'completed':
-                text = result.get('text', '')
-                if len(text) < 20:
-                    st.warning("⚠️ Very little text detected. Video lo voice undha?")
-                return text
+                progress.progress(100)
+                status.text("✅ Complete!")
+                return result.get('text', '')
             elif result['status'] == 'error':
                 return None
+            
+            time.sleep(2)
         
         return None
     except Exception as e:
@@ -252,26 +309,26 @@ def transcribe_with_assemblyai(audio_path):
         return None
 
 # ========== TEXT TO SPEECH ==========
-def text_to_speech(text, lang='en'):
+def text_to_speech(text):
     try:
         if not text or len(text.strip()) == 0:
             return None
         
         text_for_audio = text[:1000] if len(text) > 1000 else text
-        tts = gTTS(text=text_for_audio, lang=lang, slow=False)
+        tts = gTTS(text=text_for_audio, lang='en', slow=False)
         audio_bytes = io.BytesIO()
         tts.write_to_fp(audio_bytes)
         audio_bytes.seek(0)
         return audio_bytes
     except Exception as e:
-        st.warning(f"⚠️ Audio generation failed: {e}")
+        st.warning(f"Audio failed: {e}")
         return None
 
-# ========== GENERATE SUMMARY WITH DYNAMIC LENGTH ==========
+# ========== GENERATE SUMMARY ==========
 def generate_summary(text, num_points=5):
     sentences = nltk.sent_tokenize(text)
     if len(sentences) <= num_points:
-        return text, len(sentences)
+        return text
     
     words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
     word_freq = Counter(words)
@@ -289,86 +346,77 @@ def generate_summary(text, num_points=5):
     
     summary = f"📌 **MAIN POINTS ({num_points} of {len(sentences)} sentences)**\n\n"
     for i, idx in enumerate(top_indices, 1):
-        # Clean each sentence
-        clean_sent = ' '.join(sentences[idx].split())
-        summary += f"{i}. {clean_sent}\n\n"
+        summary += f"{i}. {sentences[idx]}\n\n"
     
-    return summary, len(sentences)
+    return summary
 
-# ========== DISPLAY RESULTS WITH SENTENCE CONTROL ==========
+# ========== DISPLAY RESULTS ==========
 def display_results(text, source_name):
-    # Sentence count
     total_sentences = len(nltk.sent_tokenize(text))
     
-    # Slider for summary length
+    # Slider
     st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
     col1, col2 = st.columns([3, 1])
     with col1:
-        num_summary_sentences = st.slider(
-            "📊 Number of summary sentences:",
+        max_val = min(30, total_sentences)
+        num_points = st.slider(
+            "Summary sentences:",
             min_value=3,
-            max_value=min(30, total_sentences),
-            value=min(5, total_sentences),
-            help="Adjust how many sentences you want in summary"
+            max_value=max_val,
+            value=min(5, max_val),
+            key=f"slider_{source_name}"
         )
     with col2:
-        st.metric("Total Sentences", total_sentences)
+        st.metric("Total", total_sentences)
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Generate summary with selected length
-    summary, total = generate_summary(text, num_summary_sentences)
-    
+    # Summary
+    summary = generate_summary(text, num_points)
     st.markdown("## 📋 Summary")
     st.markdown(f"<div class='section-card'>{summary}</div>", unsafe_allow_html=True)
     
     # Statistics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+    cols = st.columns(4)
+    with cols[0]:
         st.metric("Characters", f"{len(text):,}")
-    with col2:
+    with cols[1]:
         st.metric("Words", f"{len(text.split()):,}")
-    with col3:
+    with cols[2]:
         st.metric("Sentences", f"{total_sentences:,}")
-    with col4:
-        reduction = int((1 - num_summary_sentences/total_sentences) * 100)
+    with cols[3]:
+        reduction = int((1 - num_points/total_sentences) * 100)
         st.metric("Reduced", f"{reduction}%")
     
-    # Download section
+    # Downloads
     st.markdown("### 📥 Downloads")
-    col1, col2, col3, col4 = st.columns(4)
+    cols = st.columns(3)
     
-    with col1:
+    with cols[0]:
         st.download_button("📄 Full Text", text, f"{source_name}_full.txt")
     
-    with col2:
+    with cols[1]:
         st.download_button("📝 Summary", summary, f"{source_name}_summary.txt")
     
-    with col3:
+    with cols[2]:
         audio = text_to_speech(summary)
         if audio:
             st.audio(audio, format='audio/mp3')
             st.download_button("🔊 Audio", audio, f"{source_name}_audio.mp3", "audio/mp3")
     
-    with col4:
-        if st.button("🔗 Share"):
-            st.info("✅ Link copied to clipboard!")
-    
     # Keywords
-    keywords = Counter(re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())).most_common(10)
-    st.markdown("### 🏷️ Keywords")
-    html = "<div>"
-    for word, count in keywords[:8]:
-        html += f"<span class='keyword-tag'>{word} ({count})</span> "
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
-    
-    # Show preview
-    with st.expander("👁️ Preview Raw Text (First 500 chars)"):
-        st.text(text[:500] + "..." if len(text) > 500 else text)
+    words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
+    keywords = Counter(words).most_common(10)
+    if keywords:
+        st.markdown("### 🏷️ Keywords")
+        html = "<div>"
+        for word, count in keywords[:8]:
+            html += f"<span class='keyword-tag'>{word} ({count})</span> "
+        html += "</div>"
+        st.markdown(html, unsafe_allow_html=True)
 
 # ========== MAIN UI ==========
 def main():
-    tab1, tab2, tab3, tab4 = st.tabs(["📁 File Upload", "🌐 URL", "📝 Paste Text", "ℹ️ Help"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📁 File Upload", "🌐 URL/YouTube", "📝 Paste Text", "ℹ️ Help"])
     
     with tab1:
         uploaded_file = st.file_uploader(
@@ -386,7 +434,7 @@ def main():
             elif file_ext in ['mp3', 'wav', 'm4a']:
                 st.audio(uploaded_file)
             
-            if st.button("🚀 Process"):
+            if st.button("🚀 Process", key="proc_file"):
                 with st.spinner("Processing..."):
                     with tempfile.NamedTemporaryFile(delete=False) as tmp:
                         tmp.write(uploaded_file.getvalue())
@@ -398,12 +446,12 @@ def main():
                             st.success(f"✅ Extracted {pages} pages")
                             display_results(text, "pdf")
                     elif file_ext == 'txt':
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        with open(path, 'r', encoding='utf-8') as f:
                             text = f.read()
                         display_results(text, "text")
                     else:
                         if not st.session_state.assemblyai_key:
-                            st.error("❌ AssemblyAI Key required for video/audio")
+                            st.error("❌ AssemblyAI Key required")
                         else:
                             text = transcribe_with_assemblyai(path)
                             if text:
@@ -413,57 +461,65 @@ def main():
                     os.unlink(path)
     
     with tab2:
-        url = st.text_input("Enter URL", placeholder="https://example.com/article")
-        if url and st.button("🌐 Fetch Clean Content"):
-            if validators.url(url):
-                with st.spinner("Fetching clean content..."):
-                    text, title = extract_clean_from_url(url)
-                    if text and len(text) > 100:
-                        st.success(f"✅ Fetched: {title}")
-                        st.info(f"📊 Extracted {len(text)} characters, {len(text.split())} words")
+        url = st.text_input("Enter URL", placeholder="https://example.com/article or YouTube link")
+        
+        if url and st.button("🌐 Fetch Content", key="fetch_url"):
+            # Check if YouTube
+            if 'youtube.com' in url or 'youtu.be' in url:
+                with st.spinner("Processing YouTube video..."):
+                    text, title, error = extract_youtube_content(url)
+                    
+                    if text:
+                        st.success(f"✅ {title}")
+                        st.info(f"📊 Extracted {len(text)} characters")
+                        display_results(text, "youtube")
+                    else:
+                        st.markdown(f"<div class='warning-box'>⚠️ {error}</div>", unsafe_allow_html=True)
+                        if "AssemblyAI Key" in error:
+                            st.info("🔑 Add your AssemblyAI key in sidebar to transcribe this video")
+            
+            # Regular article URL
+            elif validators.url(url):
+                with st.spinner("Fetching article..."):
+                    text, title = extract_article_from_url(url)
+                    if text:
+                        st.success(f"✅ {title}")
+                        st.info(f"📊 Extracted {len(text)} characters")
                         display_results(text, "web")
                     else:
-                        st.warning("⚠️ No readable content found at this URL")
+                        st.warning("⚠️ No readable content found")
             else:
                 st.error("❌ Invalid URL")
     
     with tab3:
-        text_input = st.text_area("Paste text", height=200, placeholder="Paste any article, news, or text here...")
-        
-        if text_input and st.button("📝 Summarize"):
+        text_input = st.text_area("Paste text", height=200)
+        if text_input and st.button("📝 Summarize", key="summ_text"):
             if len(text_input) > 100:
                 display_results(text_input, "pasted")
             else:
-                st.warning("Text too short (minimum 100 characters)")
+                st.warning("Text too short")
     
     with tab4:
         st.markdown("""
         <div class='section-card'>
             <h3>📌 How to Use</h3>
             <ol>
-                <li><strong>Get API Key:</strong> Sign up at <a href='https://www.assemblyai.com/' target='_blank'>AssemblyAI</a> (Free - 10 hours/month)</li>
-                <li><strong>Choose Input:</strong> Upload file, paste URL, or enter text</li>
-                <li><strong>Adjust Sentences:</strong> Use slider to control summary length</li>
-                <li><strong>Download:</strong> Get text, summary, or audio</li>
+                <li><strong>Get AssemblyAI Key:</strong> Free at assemblyai.com</li>
+                <li><strong>Upload:</strong> File, URL, or paste text</li>
+                <li><strong>YouTube:</strong> Auto-detects and transcribes</li>
+                <li><strong>Adjust:</strong> Use slider for summary length</li>
+                <li><strong>Download:</strong> Text, summary, or audio</li>
             </ol>
             
-            <h3>✨ New Features</h3>
+            <h3>🎯 YouTube Support</h3>
             <ul>
-                <li>✅ <strong>Clean URL extraction</strong> - No footer/copyright text</li>
-                <li>✅ <strong>Sentence slider</strong> - Control summary length (3-30 sentences)</li>
-                <li>✅ <strong>Better statistics</strong> - Shows reduction percentage</li>
-                <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
-            </ul>
-            
-            <h3>🌐 URL Tips</h3>
-            <ul>
-                <li>Works best with news articles, blogs, and text-based pages</li>
-                <li>Automatically removes ads, navigation, and copyright text</li>
-                <li>For YouTube, download video and upload directly for transcription</li>
+                <li>✅ With captions: Instant text</li>
+                <li>✅ Without captions: Auto-download + AssemblyAI</li>
+                <li>✅ Telugu videos supported</li>
+                <li>✅ No manual downloading needed</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
 
-# ========== CALL MAIN FUNCTION ==========
 if __name__ == "__main__":
     main()
