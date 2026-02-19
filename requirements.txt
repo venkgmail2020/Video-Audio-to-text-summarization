@@ -1,5 +1,8 @@
 streamlit
 requests
 nltk
-sumy
 PyPDF2
+gtts
+validators
+beautifulsoup4
+sumy
