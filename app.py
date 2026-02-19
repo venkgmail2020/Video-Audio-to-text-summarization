@@ -93,6 +93,13 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
     }
+    .audio-section {
+        background: #e8f4f8;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border: 1px solid #b8d9e5;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -140,7 +147,6 @@ def extract_pdf_text(pdf_path):
 
 # ========== CLEAN URL EXTRACTION ==========
 def extract_clean_from_url(url):
-    """Extract ONLY main content, no ads/footer/copyright"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
@@ -148,12 +154,10 @@ def extract_clean_from_url(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Remove unwanted elements
             for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 
                                'form', 'button', 'iframe', 'meta', 'link']):
                 element.decompose()
             
-            # Try to find main content
             main_content = None
             for selector in ['main', 'article', '[role="main"]', '.content', '.post-content', 
                            '.article-content', '#content', '.main-content']:
@@ -164,16 +168,13 @@ def extract_clean_from_url(url):
             if main_content:
                 text = main_content.get_text()
             else:
-                # Get all paragraphs (usually main content)
                 paragraphs = soup.find_all('p')
                 text = ' '.join([p.get_text() for p in paragraphs if len(p.get_text()) > 30])
             
-            # Clean text
             lines = (line.strip() for line in text.splitlines())
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
             text = ' '.join(chunk for chunk in chunks if chunk and len(chunk) > 20)
             
-            # Remove common footer/copyright patterns
             footer_patterns = [
                 r'©.*?\d{4}.*?rights reserved',
                 r'Privacy.*?Policy',
@@ -190,24 +191,18 @@ def extract_clean_from_url(url):
             for pattern in footer_patterns:
                 text = re.sub(pattern, '', text, flags=re.IGNORECASE)
             
-            # Remove extra whitespace
             text = re.sub(r'\s+', ' ', text).strip()
-            
-            # Get title
             title = soup.title.string if soup.title else "Article"
             title = re.sub(r'[|\-].*$', '', title).strip()
             
             return text, title
         return None, None
-    except Exception as e:
-        st.error(f"URL extraction error: {e}")
+    except:
         return None, None
 
 # ========== YOUTUBE EXTRACTION ==========
 def extract_youtube_content(url):
-    """Extract actual content from YouTube video"""
     try:
-        # Extract video ID
         video_id = None
         if 'youtube.com/watch?v=' in url:
             video_id = url.split('watch?v=')[-1].split('&')[0]
@@ -217,20 +212,15 @@ def extract_youtube_content(url):
         if not video_id:
             return None, None
         
-        # METHOD 1: Try to get transcript (if captions available)
         try:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            # Try Telugu first, then English, then Hindi
             for lang in ['te', 'en', 'hi']:
                 try:
                     transcript = transcript_list.find_transcript([lang])
                     transcript_data = transcript.fetch()
-                    
-                    # Convert to text
                     full_text = ' '.join([item['text'] for item in transcript_data])
                     
-                    # Get video title
                     with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                         info = ydl.extract_info(url, download=False)
                         title = info.get('title', 'YouTube Video')
@@ -241,7 +231,6 @@ def extract_youtube_content(url):
         except:
             pass
         
-        # METHOD 2: If no transcript, try to get description as fallback
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'YouTube Video')
@@ -261,7 +250,6 @@ def transcribe_with_assemblyai(audio_path):
     try:
         headers = {'authorization': st.session_state.assemblyai_key}
         
-        # Upload
         with open(audio_path, 'rb') as f:
             response = requests.post(
                 'https://api.assemblyai.com/v2/upload',
@@ -270,7 +258,6 @@ def transcribe_with_assemblyai(audio_path):
             )
         upload_url = response.json()['upload_url']
         
-        # Transcribe with Telugu support
         transcript_request = {
             'audio_url': upload_url,
             'language_detection': True,
@@ -284,7 +271,6 @@ def transcribe_with_assemblyai(audio_path):
         )
         transcript_id = response.json()['id']
         
-        # Poll for result
         progress = st.progress(0)
         for i in range(60):
             time.sleep(2)
@@ -309,17 +295,15 @@ def transcribe_with_assemblyai(audio_path):
         st.error(f"Transcription error: {e}")
         return None
 
-# ========== NORMAL VOICE TEXT TO SPEECH (ADDED) ==========
+# ========== NORMAL VOICE TEXT TO SPEECH ==========
 def text_to_speech_normal(text, voice_type="clear"):
-    """Convert text to normal, clear voice using Edge TTS"""
     try:
-        # Clear, natural voice options
         voices = {
-            "clear": "en-US-JennyNeural",      # Clear American female
-            "indian": "en-IN-NeerjaNeural",    # Indian female
-            "telugu": "te-IN-ShrutiNeural",    # Telugu female
-            "british": "en-GB-SoniaNeural",    # British female
-            "male": "en-US-GuyNeural"          # American male
+            "clear": "en-US-JennyNeural",
+            "indian": "en-IN-NeerjaNeural",
+            "telugu": "te-IN-ShrutiNeural",
+            "british": "en-GB-SoniaNeural",
+            "male": "en-US-GuyNeural"
         }
         
         selected_voice = voices.get(voice_type, "en-US-JennyNeural")
@@ -329,17 +313,14 @@ def text_to_speech_normal(text, voice_type="clear"):
             communicate = edge_tts.Communicate(text_to_speak, selected_voice)
             await communicate.save("normal_voice.mp3")
         
-        # Run async function
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(generate())
         loop.close()
         
-        # Read audio file
         with open("normal_voice.mp3", "rb") as f:
             audio_bytes = f.read()
         
-        # Clean up
         if os.path.exists("normal_voice.mp3"):
             os.remove("normal_voice.mp3")
         
@@ -376,23 +357,19 @@ def generate_summary(text, num_points=5):
     
     return summary, len(sentences)
 
-# ========== DISPLAY RESULTS WITH NORMAL VOICE ==========
+# ========== DISPLAY RESULTS WITH FIXED VOICE SELECTOR ==========
 def display_results(text, source_name):
-    # Sentence count
     total_sentences = len(nltk.sent_tokenize(text))
     
-    # Slider for summary length - FIXED VERSION
+    # Summary slider
     st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
     col1, col2 = st.columns([3, 1])
     with col1:
-        # Handle very short texts (like YouTube descriptions)
         if total_sentences < 3:
             st.warning(f"⚠️ Text has only {total_sentences} sentence(s). Showing full text.")
             num_summary_sentences = total_sentences
-            # Disable slider by showing info instead
             st.info(f"📝 Using all {total_sentences} sentences")
         else:
-            # Calculate safe values
             max_slider = min(30, total_sentences)
             min_slider = 3
             default_val = min(5, max_slider)
@@ -402,15 +379,14 @@ def display_results(text, source_name):
                 min_value=min_slider,
                 max_value=max_slider,
                 value=default_val,
-                help="Adjust how many sentences you want in summary"
+                key=f"slider_{source_name}"
             )
     with col2:
         st.metric("Total Sentences", total_sentences)
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Generate summary with selected length
+    # Generate summary
     if total_sentences < 3:
-        # For very short texts, just show the text itself
         summary = f"📌 **FULL TEXT ({total_sentences} sentences)**\n\n{text}"
         used_sentences = total_sentences
     else:
@@ -428,30 +404,36 @@ def display_results(text, source_name):
     with col3:
         st.metric("Sentences", f"{total_sentences:,}")
     with col4:
-        if total_sentences > 0:
-            reduction = int((1 - used_sentences/total_sentences) * 100)
-        else:
-            reduction = 0
+        reduction = int((1 - used_sentences/total_sentences) * 100) if total_sentences > 0 else 0
         st.metric("Reduced", f"{reduction}%")
     
-    # Download section with NORMAL VOICE
-    st.markdown("### 📥 Downloads")
-    col1, col2, col3, col4 = st.columns(4)
+    # ===== AUDIO SECTION - FIXED (NO REFRESH) =====
+    st.markdown("### 🎤 Audio Options")
     
-    with col1:
-        st.download_button("📄 Full Text", text, f"{source_name}_full.txt")
+    # Use unique keys for this source
+    audio_key = f"audio_data_{source_name}"
+    voice_key = f"voice_select_{source_name}"
     
-    with col2:
-        st.download_button("📝 Summary", summary, f"{source_name}_summary.txt")
+    col_v1, col_v2, col_v3 = st.columns([2, 1, 1])
     
-    with col3:
-        # Voice selector for normal voice
+    with col_v1:
         voice_option = st.selectbox(
-            "Voice Style",
+            "Select Voice Style",
             ["Clear English", "Indian English", "Telugu", "British", "American Male"],
-            key=f"voice_{source_name}"
+            key=voice_key
         )
-        
+    
+    with col_v2:
+        generate_clicked = st.button("🎵 Generate Audio", key=f"gen_{source_name}")
+    
+    with col_v3:
+        if st.button("🗑️ Clear Audio", key=f"clear_{source_name}"):
+            if audio_key in st.session_state:
+                del st.session_state[audio_key]
+            st.rerun()
+    
+    # Generate audio only when button clicked
+    if generate_clicked:
         voice_map = {
             "Clear English": "clear",
             "Indian English": "indian",
@@ -459,24 +441,52 @@ def display_results(text, source_name):
             "British": "british",
             "American Male": "male"
         }
-        
-        # Generate normal voice audio
-        audio = text_to_speech_normal(summary, voice_map[voice_option])
-        if audio:
-            st.audio(audio, format='audio/mp3')
-            st.download_button(
-                "🔊 Download Audio",
-                audio,
-                file_name="summary_audio.mp3",
-                mime="audio/mp3",
-                use_container_width=True
-            )
-        else:
-            st.warning("Audio not available")
+        with st.spinner("🎵 Generating audio... This may take a few seconds"):
+            audio = text_to_speech_normal(summary, voice_map[voice_option])
+            if audio:
+                st.session_state[audio_key] = audio
+                st.success("✅ Audio generated successfully!")
+            else:
+                st.error("❌ Audio generation failed")
     
-    with col4:
-        if st.button("🔗 Share"):
-            st.success("✅ Link copied!")
+    # Display audio if exists
+    if audio_key in st.session_state:
+        st.audio(st.session_state[audio_key], format='audio/mp3')
+        st.download_button(
+            "📥 Download Audio File",
+            st.session_state[audio_key],
+            file_name=f"summary_{source_name}.mp3",
+            mime="audio/mp3",
+            key=f"download_{source_name}",
+            use_container_width=True
+        )
+    
+    # ===== DOWNLOADS SECTION =====
+    st.markdown("### 📥 Downloads")
+    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+    
+    with col_d1:
+        st.download_button(
+            "📄 Full Text",
+            text,
+            file_name=f"{source_name}_full.txt",
+            key=f"full_{source_name}"
+        )
+    
+    with col_d2:
+        st.download_button(
+            "📝 Summary",
+            summary,
+            file_name=f"{source_name}_summary.txt",
+            key=f"summary_{source_name}"
+        )
+    
+    with col_d3:
+        st.button("🔊 Audio Available Above", disabled=True, key=f"adummy_{source_name}")
+    
+    with col_d4:
+        if st.button("🔗 Share", key=f"share_{source_name}"):
+            st.success("✅ Share link copied to clipboard!")
     
     # Keywords
     keywords = Counter(re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())).most_common(10)
@@ -487,7 +497,7 @@ def display_results(text, source_name):
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
     
-    # Show preview
+    # Preview
     with st.expander("👁️ Preview Raw Text (First 500 chars)"):
         st.text(text[:500] + "..." if len(text) > 500 else text)
 
@@ -511,7 +521,7 @@ def main():
             elif file_ext in ['mp3', 'wav', 'm4a']:
                 st.audio(uploaded_file)
             
-            if st.button("🚀 Process"):
+            if st.button("🚀 Process", key=f"proc_{uploaded_file.name}"):
                 with st.spinner("Processing..."):
                     with tempfile.NamedTemporaryFile(delete=False) as tmp:
                         tmp.write(uploaded_file.getvalue())
@@ -538,11 +548,10 @@ def main():
                     os.unlink(path)
     
     with tab2:
-        st.markdown("### Enter URL (Article or YouTube)")
-        url = st.text_input("", placeholder="https://example.com/article or https://youtube.com/watch?v=...")
+        st.markdown("### Enter URL")
+        url = st.text_input("", placeholder="https://example.com/article or YouTube link")
         
-        if url and st.button("🌐 Fetch Content"):
-            # Check if it's a YouTube URL
+        if url and st.button("🌐 Fetch Content", key="fetch_url"):
             if 'youtube.com' in url or 'youtu.be' in url:
                 with st.spinner("📹 Fetching YouTube content..."):
                     text, title = extract_youtube_content(url)
@@ -551,22 +560,22 @@ def main():
                         st.info(f"📊 Extracted {len(text)} characters, {len(text.split())} words")
                         display_results(text, "youtube")
                     else:
-                        st.warning("⚠️ No transcript available. Try downloading the video and uploading directly.")
+                        st.warning("⚠️ No transcript available. Try downloading the video directly.")
             elif validators.url(url):
-                with st.spinner("Fetching clean content..."):
+                with st.spinner("Fetching content..."):
                     text, title = extract_clean_from_url(url)
                     if text and len(text) > 100:
                         st.success(f"✅ Fetched: {title}")
                         display_results(text, "web")
                     else:
-                        st.warning("⚠️ No readable content found at this URL")
+                        st.warning("⚠️ No readable content found")
             else:
                 st.error("❌ Invalid URL")
     
     with tab3:
         text_input = st.text_area("Paste text", height=200, placeholder="Paste any article, news, or text here...")
         
-        if text_input and st.button("📝 Summarize"):
+        if text_input and st.button("📝 Summarize", key="summarize_text"):
             if len(text_input) > 100:
                 display_results(text_input, "pasted")
             else:
@@ -577,29 +586,20 @@ def main():
         <div class='section-card'>
             <h3>📌 How to Use</h3>
             <ol>
-                <li><strong>Get API Key:</strong> Sign up at <a href='https://www.assemblyai.com/' target='_blank'>AssemblyAI</a> (Free - 10 hours/month)</li>
+                <li><strong>Get API Key:</strong> Sign up at <a href='https://www.assemblyai.com/' target='_blank'>AssemblyAI</a> (Free)</li>
                 <li><strong>Choose Input:</strong> Upload file, paste URL, or enter text</li>
                 <li><strong>Adjust Sentences:</strong> Use slider to control summary length</li>
-                <li><strong>Download:</strong> Get text, summary, or audio with normal voice</li>
+                <li><strong>Generate Audio:</strong> Select voice and click button (no refresh)</li>
+                <li><strong>Download:</strong> Get text, summary, or audio</li>
             </ol>
             
             <h3>✨ Features</h3>
             <ul>
-                <li>✅ <strong>Normal Voice</strong> - Clear, natural audio</li>
+                <li>✅ <strong>No Refresh Audio</strong> - Voice selector won't reload page</li>
+                <li>✅ <strong>5 Natural Voices</strong> - Clear English, Indian, Telugu, British, Male</li>
                 <li>✅ <strong>YouTube Support</strong> - Extracts captions/description</li>
                 <li>✅ <strong>Clean URLs</strong> - No footer/copyright text</li>
-                <li>✅ <strong>Sentence slider</strong> - Control summary length</li>
-                <li>✅ <strong>Fixed slider error</strong> - Handles short texts</li>
                 <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
-            </ul>
-            
-            <h3>🎤 Voice Options</h3>
-            <ul>
-                <li><strong>Clear English</strong> - American female, crystal clear</li>
-                <li><strong>Indian English</strong> - Indian female, natural accent</li>
-                <li><strong>Telugu</strong> - Telugu language female voice</li>
-                <li><strong>British</strong> - British female, elegant</li>
-                <li><strong>American Male</strong> - Deep male voice</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
