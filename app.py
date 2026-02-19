@@ -323,7 +323,7 @@ def text_to_speech(text, lang='en'):
         st.warning(f"⚠️ Audio generation failed: {e}")
         return None
 
-# ========== GENERATE SUMMARY WITH DYNAMIC LENGTH ==========
+# ========== GENERATE SUMMARY ==========
 def generate_summary(text, num_points=5):
     sentences = nltk.sent_tokenize(text)
     if len(sentences) <= num_points:
@@ -345,34 +345,50 @@ def generate_summary(text, num_points=5):
     
     summary = f"📌 **MAIN POINTS ({num_points} of {len(sentences)} sentences)**\n\n"
     for i, idx in enumerate(top_indices, 1):
-        # Clean each sentence
         clean_sent = ' '.join(sentences[idx].split())
         summary += f"{i}. {clean_sent}\n\n"
     
     return summary, len(sentences)
 
-# ========== DISPLAY RESULTS ==========
+# ========== DISPLAY RESULTS WITH FIXED SLIDER ==========
 def display_results(text, source_name):
     # Sentence count
     total_sentences = len(nltk.sent_tokenize(text))
     
-    # Slider for summary length
+    # Slider for summary length - FIXED VERSION
     st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
     col1, col2 = st.columns([3, 1])
     with col1:
-        num_summary_sentences = st.slider(
-            "📊 Number of summary sentences:",
-            min_value=3,
-            max_value=min(30, total_sentences),
-            value=min(5, total_sentences),
-            help="Adjust how many sentences you want in summary"
-        )
+        # Handle very short texts (like YouTube descriptions)
+        if total_sentences < 3:
+            st.warning(f"⚠️ Text has only {total_sentences} sentence(s). Showing full text.")
+            num_summary_sentences = total_sentences
+            # Disable slider by showing info instead
+            st.info(f"📝 Using all {total_sentences} sentences")
+        else:
+            # Calculate safe values
+            max_slider = min(30, total_sentences)
+            min_slider = 3
+            default_val = min(5, max_slider)
+            
+            num_summary_sentences = st.slider(
+                "📊 Number of summary sentences:",
+                min_value=min_slider,
+                max_value=max_slider,
+                value=default_val,
+                help="Adjust how many sentences you want in summary"
+            )
     with col2:
         st.metric("Total Sentences", total_sentences)
     st.markdown("</div>", unsafe_allow_html=True)
     
     # Generate summary with selected length
-    summary, total = generate_summary(text, num_summary_sentences)
+    if total_sentences < 3:
+        # For very short texts, just show the text itself
+        summary = f"📌 **FULL TEXT ({total_sentences} sentences)**\n\n{text}"
+        used_sentences = total_sentences
+    else:
+        summary, used_sentences = generate_summary(text, num_summary_sentences)
     
     st.markdown("## 📋 Summary")
     st.markdown(f"<div class='section-card'>{summary}</div>", unsafe_allow_html=True)
@@ -386,7 +402,10 @@ def display_results(text, source_name):
     with col3:
         st.metric("Sentences", f"{total_sentences:,}")
     with col4:
-        reduction = int((1 - num_summary_sentences/total_sentences) * 100)
+        if total_sentences > 0:
+            reduction = int((1 - used_sentences/total_sentences) * 100)
+        else:
+            reduction = 0
         st.metric("Reduced", f"{reduction}%")
     
     # Download section
@@ -407,7 +426,7 @@ def display_results(text, source_name):
     
     with col4:
         if st.button("🔗 Share"):
-            st.info("✅ Link copied to clipboard!")
+            st.success("✅ Link copied!")
     
     # Keywords
     keywords = Counter(re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())).most_common(10)
@@ -519,6 +538,7 @@ def main():
                 <li>✅ <strong>YouTube Support</strong> - Extracts captions/description</li>
                 <li>✅ <strong>Clean URLs</strong> - No footer/copyright text</li>
                 <li>✅ <strong>Sentence slider</strong> - Control summary length</li>
+                <li>✅ <strong>Fixed slider error</strong> - Handles short texts</li>
                 <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
             </ul>
             
