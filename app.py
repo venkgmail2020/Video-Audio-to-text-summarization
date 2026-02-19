@@ -21,7 +21,6 @@ import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 import asyncio
 import edge_tts
-import random
 
 # Download NLTK data
 try:
@@ -76,9 +75,6 @@ st.markdown("""
         text-align: center;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-    }
     .stButton > button {
         background: linear-gradient(135deg, #667eea, #764ba2);
         color: white;
@@ -87,6 +83,11 @@ st.markdown("""
         border-radius: 25px;
         font-weight: bold;
         width: 100%;
+        transition: all 0.3s;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
     .slider-container {
         background: #f0f2f6;
@@ -94,35 +95,19 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
     }
-    .warning-box {
-        background: #fff3cd;
-        border: 1px solid #ffc107;
-        padding: 1rem;
-        border-radius: 8px;
+    .audio-container {
+        background: #e3f2fd;
+        padding: 1.5rem;
+        border-radius: 10px;
         margin: 1rem 0;
-        color: #856404;
+        border: 1px solid #90caf9;
     }
-    .success-box {
+    .success-msg {
         background: #d4edda;
-        border: 1px solid #c3e6cb;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
         color: #155724;
-    }
-    .info-box {
-        background: #d1ecf1;
-        border: 1px solid #bee5eb;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-        color: #0c5460;
-    }
-    .proxy-option {
-        background: #e2e3e5;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
+        padding: 0.5rem;
+        border-radius: 5px;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -136,6 +121,8 @@ if 'processed_texts' not in st.session_state:
     st.session_state.processed_texts = {}
 if 'audio_cache' not in st.session_state:
     st.session_state.audio_cache = {}
+if 'current_summary' not in st.session_state:
+    st.session_state.current_summary = ''
 
 # Sidebar
 with st.sidebar:
@@ -144,7 +131,7 @@ with st.sidebar:
         "AssemblyAI Key",
         value=st.session_state.assemblyai_key,
         type="password",
-        help="Get free key from assemblyai.com - Required for YouTube videos"
+        help="Get free key from assemblyai.com"
     )
     if st.button("💾 Save Keys", use_container_width=True):
         st.session_state.assemblyai_key = assembly_key
@@ -156,7 +143,7 @@ with st.sidebar:
     st.markdown("🎵 Audio: MP3, WAV, M4A")
     st.markdown("📄 PDF, TXT")
     st.markdown("🌐 Articles")
-    st.markdown("▶️ YouTube (with proxy support)")
+    st.markdown("▶️ YouTube")
 
 # ========== PDF EXTRACTION ==========
 def extract_pdf_text(pdf_path):
@@ -175,7 +162,6 @@ def extract_pdf_text(pdf_path):
 
 # ========== ARTICLE URL EXTRACTION ==========
 def extract_article_from_url(url):
-    """Extract article content from URL"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=15)
@@ -183,33 +169,25 @@ def extract_article_from_url(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Remove unwanted elements
             for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
                 element.decompose()
             
-            # Get title
             title = soup.title.string if soup.title else "Article"
             title = re.sub(r'[|\-].*$', '', title).strip()
             
-            # Get all paragraphs
             paragraphs = soup.find_all('p')
             text = ' '.join([p.get_text() for p in paragraphs if len(p.get_text()) > 40])
-            
-            # Clean text
             text = re.sub(r'\s+', ' ', text).strip()
             
             if text and len(text) > 200:
                 return text, title
         return None, None
     except Exception as e:
-        st.error(f"URL extraction error: {e}")
         return None, None
 
-# ========== YOUTUBE CONTENT EXTRACTION WITH PROXY ==========
-def extract_youtube_content(url, use_proxy=False):
-    """Extract content from YouTube video with optional proxy for region-locked videos"""
+# ========== YOUTUBE EXTRACTION ==========
+def extract_youtube_content(url):
     try:
-        # Extract video ID
         video_id = None
         if 'youtube.com/watch?v=' in url:
             video_id = url.split('watch?v=')[-1].split('&')[0]
@@ -219,7 +197,7 @@ def extract_youtube_content(url, use_proxy=False):
         if not video_id:
             return None, None, "Invalid YouTube URL"
         
-        # Try to get captions first (doesn't need proxy usually)
+        # Try captions first
         try:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             for lang in ['te', 'en', 'hi']:
@@ -228,7 +206,6 @@ def extract_youtube_content(url, use_proxy=False):
                     transcript_data = transcript.fetch()
                     full_text = ' '.join([item['text'] for item in transcript_data])
                     
-                    # Get video title
                     with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                         info = ydl.extract_info(url, download=False)
                         title = info.get('title', 'YouTube Video')
@@ -239,112 +216,33 @@ def extract_youtube_content(url, use_proxy=False):
         except:
             pass
         
-        # If no captions, try to get info with optional proxy
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-        }
-        
-        # Add proxy if requested
-        if use_proxy:
-            # List of free proxies (may not always work)
-            proxies = [
-                'http://103.149.162.195:80',
-                'http://183.83.48.75:8080', 
-                'http://49.156.38.148:8080',
-                'http://103.142.110.130:80',
-            ]
-            import random
-            ydl_opts['proxy'] = random.choice(proxies)
-        
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                title = info.get('title', 'YouTube Video')
-                description = info.get('description', '')
-                
-                if description and len(description) > 100:
-                    return description, f"YouTube: {title} (Description)", None
-                else:
-                    # If description is short but we have AssemblyAI key, try to download and transcribe
-                    if st.session_state.assemblyai_key:
-                        st.info("📥 Downloading audio for transcription...")
-                        return download_and_transcribe_youtube(url, ydl_opts)
-                    else:
-                        return None, None, "No captions found and AssemblyAI key required for transcription"
-        except Exception as e:
-            error_msg = str(e)
-            if "uploader has not made this video available" in error_msg:
-                if use_proxy:
-                    return None, None, "Even with proxy, video unavailable. Try downloading manually."
-                else:
-                    return None, None, "This video is region-restricted to India. Enable proxy option and try again."
-            else:
-                return None, None, f"YouTube error: {error_msg[:100]}"
-        
-    except Exception as e:
-        return None, None, f"YouTube error: {str(e)[:100]}"
-
-def download_and_transcribe_youtube(url, ydl_opts):
-    """Download YouTube audio and transcribe with AssemblyAI"""
-    try:
-        # Download audio
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': 'youtube_audio.%(ext)s',
-        })
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        # Try description
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
             title = info.get('title', 'YouTube Video')
-        
-        audio_path = 'youtube_audio.mp3'
-        
-        # Check if file exists
-        if not os.path.exists(audio_path):
-            return None, None, "Audio download failed"
-        
-        # Transcribe with AssemblyAI
-        transcribed_text = transcribe_with_assemblyai(audio_path)
-        
-        # Clean up
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
-        
-        if transcribed_text:
-            return transcribed_text, f"YouTube: {title} (Transcribed)", None
-        else:
-            return None, None, "Transcription failed. Audio might be silent or API error."
+            description = info.get('description', '')
             
+            if description and len(description) > 100:
+                return description, f"YouTube: {title} (Description)", None
+            else:
+                return None, None, "No captions or description found"
+        
     except Exception as e:
-        return None, None, f"Download error: {str(e)[:100]}"
+        return None, None, f"YouTube error: {str(e)}"
 
 # ========== ASSEMBLYAI TRANSCRIPTION ==========
 def transcribe_with_assemblyai(audio_path):
     try:
         headers = {'authorization': st.session_state.assemblyai_key}
         
-        # Upload
         with open(audio_path, 'rb') as f:
             response = requests.post(
                 'https://api.assemblyai.com/v2/upload',
                 headers=headers,
                 data=f
             )
-        
-        if response.status_code != 200:
-            st.error(f"Upload failed: {response.text}")
-            return None
-            
         upload_url = response.json()['upload_url']
         
-        # Transcribe
         transcript_request = {
             'audio_url': upload_url,
             'language_detection': True,
@@ -356,14 +254,8 @@ def transcribe_with_assemblyai(audio_path):
             json=transcript_request,
             headers=headers
         )
-        
-        if response.status_code != 200:
-            st.error(f"Transcription request failed: {response.text}")
-            return None
-            
         transcript_id = response.json()['id']
         
-        # Poll for result
         progress = st.progress(0)
         status = st.empty()
         
@@ -382,15 +274,12 @@ def transcribe_with_assemblyai(audio_path):
                 status.text("✅ Complete!")
                 return result.get('text', '')
             elif result['status'] == 'error':
-                error_msg = result.get('error', 'Unknown error')
-                st.error(f"Transcription error: {error_msg}")
                 return None
             
             time.sleep(2)
         
         return None
     except Exception as e:
-        st.error(f"Transcription error: {e}")
         return None
 
 # ========== TEXT TO SPEECH ==========
@@ -453,23 +342,26 @@ def generate_summary(text, num_points):
     
     return summary
 
-# ========== DISPLAY RESULTS ==========
+# ========== DISPLAY RESULTS - NO REFRESH ON BUTTON ==========
 def display_results(text, source_name):
-    text_hash = str(hash(text))[:8]
-    session_id = f"{source_name}_{text_hash}"
+    # Create unique session ID
+    import random
+    session_id = f"{source_name}_{random.randint(1000, 9999)}"
     
+    # Store text
     st.session_state.processed_texts[session_id] = text
     total_sentences = len(nltk.sent_tokenize(text))
     
-    # Initialize session state
-    if f"slider_{session_id}" not in st.session_state:
-        st.session_state[f"slider_{session_id}"] = min(5, total_sentences)
-    if f"voice_{session_id}" not in st.session_state:
-        st.session_state[f"voice_{session_id}"] = "Clear English"
+    # Initialize values
+    if f"slider_val_{session_id}" not in st.session_state:
+        st.session_state[f"slider_val_{session_id}"] = min(5, total_sentences)
+    if f"voice_val_{session_id}" not in st.session_state:
+        st.session_state[f"voice_val_{session_id}"] = "Clear English"
     
-    # Slider
+    # ===== SLIDER SECTION =====
     st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
     col1, col2 = st.columns([3, 1])
+    
     with col1:
         if total_sentences < 3:
             st.warning(f"⚠️ Only {total_sentences} sentence(s)")
@@ -480,16 +372,19 @@ def display_results(text, source_name):
                 "Number of sentences:",
                 min_value=3,
                 max_value=max_val,
-                value=st.session_state[f"slider_{session_id}"],
+                value=st.session_state[f"slider_val_{session_id}"],
                 key=f"slider_{session_id}"
             )
-            st.session_state[f"slider_{session_id}"] = current_val
+            st.session_state[f"slider_val_{session_id}"] = current_val
     with col2:
         st.metric("Total", total_sentences)
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Summary
+    # Generate summary
     summary = generate_summary(text, current_val)
+    st.session_state.current_summary = summary
+    
+    # Display summary
     st.markdown("## 📋 Summary")
     st.markdown(f"<div class='section-card'>{summary}</div>", unsafe_allow_html=True)
     
@@ -505,48 +400,69 @@ def display_results(text, source_name):
         reduction = int((1 - current_val/total_sentences) * 100) if total_sentences > 0 else 0
         st.metric("Reduced", f"{reduction}%")
     
-    # Audio Section
+    # ===== AUDIO SECTION - NO REFRESH =====
+    st.markdown("<div class='audio-container'>", unsafe_allow_html=True)
     st.markdown("### 🎤 Audio Options")
-    voice_options = ["Clear English", "Indian English", "Telugu", "British", "American Male"]
-    voice_index = voice_options.index(st.session_state[f"voice_{session_id}"])
     
-    selected_voice = st.selectbox(
-        "Choose Voice",
-        voice_options,
-        index=voice_index,
-        key=f"voice_select_{session_id}"
-    )
-    st.session_state[f"voice_{session_id}"] = selected_voice
+    col1, col2, col3 = st.columns(3)
     
-    col1, col2 = st.columns(2)
     with col1:
-        if st.button("🎵 Generate Audio", key=f"gen_{session_id}"):
-            voice_map = {
-                "Clear English": "clear",
-                "Indian English": "indian",
-                "Telugu": "telugu",
-                "British": "british",
-                "American Male": "male"
-            }
-            with st.spinner("Generating audio..."):
-                audio = text_to_speech_normal(summary, voice_map[selected_voice])
-                if audio:
-                    st.session_state[f"audio_{session_id}"] = audio
-                    st.success("✅ Audio ready!")
+        voice_options = ["Clear English", "Indian English", "Telugu", "British", "American Male"]
+        voice_index = voice_options.index(st.session_state[f"voice_val_{session_id}"])
+        
+        selected_voice = st.selectbox(
+            "Choose Voice",
+            voice_options,
+            index=voice_index,
+            key=f"voice_select_{session_id}"
+        )
+        st.session_state[f"voice_val_{session_id}"] = selected_voice
+    
+    audio_key = f"audio_{session_id}"
+    
     with col2:
-        if f"audio_{session_id}" in st.session_state:
-            st.audio(st.session_state[f"audio_{session_id}"], format='audio/mp3')
+        # Generate button - uses form to prevent refresh
+        with st.form(key=f"audio_form_{session_id}"):
+            st.markdown("&nbsp;")  # Spacing
+            submitted = st.form_submit_button("🎵 Generate Audio")
+            
+            if submitted:
+                voice_map = {
+                    "Clear English": "clear",
+                    "Indian English": "indian",
+                    "Telugu": "telugu",
+                    "British": "british",
+                    "American Male": "male"
+                }
+                with st.spinner("Generating audio..."):
+                    audio = text_to_speech_normal(summary, voice_map[selected_voice])
+                    if audio:
+                        st.session_state[audio_key] = audio
+                        st.session_state[f"audio_ready_{session_id}"] = True
+    
+    with col3:
+        # Show download button if audio exists
+        if audio_key in st.session_state:
+            st.audio(st.session_state[audio_key], format='audio/mp3')
             st.download_button(
-                "📥 Download Audio",
-                st.session_state[f"audio_{session_id}"],
+                "📥 Download",
+                st.session_state[audio_key],
                 file_name=f"summary_{source_name}.mp3",
                 mime="audio/mp3",
-                key=f"down_{session_id}"
+                key=f"download_{session_id}"
             )
     
-    # Downloads
+    # Show success message if audio was generated
+    if f"audio_ready_{session_id}" in st.session_state:
+        st.markdown("<div class='success-msg'>✅ Audio generated successfully!</div>", unsafe_allow_html=True)
+        del st.session_state[f"audio_ready_{session_id}"]
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # ===== DOWNLOADS =====
     st.markdown("### 📥 Downloads")
     cols = st.columns(3)
+    
     with cols[0]:
         st.download_button("📄 Full Text", text, f"{source_name}_full.txt", key=f"full_{session_id}")
     with cols[1]:
@@ -603,7 +519,7 @@ def main():
                         display_results(text, "text")
                     else:
                         if not st.session_state.assemblyai_key:
-                            st.error("❌ AssemblyAI Key required for video/audio")
+                            st.error("❌ AssemblyAI Key required")
                         else:
                             text = transcribe_with_assemblyai(path)
                             if text:
@@ -613,53 +529,30 @@ def main():
                     os.unlink(path)
     
     with tab2:
-        st.markdown("### Enter URL (Article or YouTube)")
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            url = st.text_input("", placeholder="https://example.com/article or YouTube link", key="url_input")
-        with col2:
-            use_proxy = st.checkbox("🌏 Use India Proxy", value=False, 
-                                   help="Enable for region-locked Indian videos")
+        st.markdown("### Enter URL")
+        url = st.text_input("", placeholder="https://example.com/article or YouTube link")
         
         if url and st.button("🌐 Fetch Content", key="fetch_url"):
-            # Check if YouTube
             if 'youtube.com' in url or 'youtu.be' in url:
                 with st.spinner("Processing YouTube video..."):
-                    if use_proxy:
-                        st.info("🔄 Using proxy for region-locked video...")
-                    
-                    text, title, error = extract_youtube_content(url, use_proxy)
-                    
+                    text, title, error = extract_youtube_content(url)
                     if text:
-                        st.markdown(f"<div class='success-box'>✅ {title}</div>", unsafe_allow_html=True)
+                        st.success(f"✅ {title}")
                         st.info(f"📊 Extracted {len(text)} characters")
                         display_results(text, "youtube")
                     else:
-                        st.markdown(f"<div class='warning-box'>⚠️ {error}</div>", unsafe_allow_html=True)
-                        
-                        if "region-restricted" in error:
-                            st.markdown("""
-                            <div class='info-box'>
-                                <strong>💡 Solutions:</strong><br>
-                                1. ✅ Enable "Use India Proxy" checkbox and try again<br>
-                                2. 📥 Download video using any YouTube downloader and upload directly<br>
-                                3. 🔑 Ensure AssemblyAI key is added for transcription
-                            </div>
-                            """, unsafe_allow_html=True)
-            
-            # Regular article URL
+                        st.warning(f"⚠️ {error}")
             elif validators.url(url):
                 with st.spinner("Fetching article..."):
                     text, title = extract_article_from_url(url)
                     if text:
-                        st.markdown(f"<div class='success-box'>✅ {title}</div>", unsafe_allow_html=True)
+                        st.success(f"✅ {title}")
                         st.info(f"📊 Extracted {len(text)} characters")
                         display_results(text, "web")
                     else:
-                        st.markdown("<div class='warning-box'>⚠️ No readable content found</div>", unsafe_allow_html=True)
+                        st.warning("⚠️ No readable content found")
             else:
-                st.markdown("<div class='warning-box'>❌ Invalid URL</div>", unsafe_allow_html=True)
+                st.error("❌ Invalid URL")
     
     with tab3:
         text_input = st.text_area("Paste text", height=200, placeholder="Paste any article, news, or text here...")
@@ -668,34 +561,25 @@ def main():
             if len(text_input) > 100:
                 display_results(text_input, "pasted")
             else:
-                st.warning("Text too short (minimum 100 characters)")
+                st.warning("Text too short")
     
     with tab4:
         st.markdown("""
         <div class='section-card'>
             <h3>📌 How to Use</h3>
             <ol>
-                <li><strong>Get AssemblyAI Key:</strong> Free at <a href='https://www.assemblyai.com/' target='_blank'>assemblyai.com</a></li>
+                <li><strong>Get AssemblyAI Key:</strong> Free at assemblyai.com</li>
                 <li><strong>Choose Input:</strong> Upload file, paste URL, or enter text</li>
-                <li><strong>YouTube Videos:</strong> Enable proxy for region-locked Indian videos</li>
                 <li><strong>Adjust Summary:</strong> Use slider to control length</li>
-                <li><strong>Generate Audio:</strong> Select voice and click button</li>
+                <li><strong>Generate Audio:</strong> Click button - no page refresh!</li>
                 <li><strong>Download:</strong> Get text, summary, or audio</li>
             </ol>
             
-            <h3>🎯 YouTube Support</h3>
+            <h3>✨ Features</h3>
             <ul>
-                <li>✅ <strong>With captions:</strong> Instant text extraction</li>
-                <li>✅ <strong>Without captions:</strong> Auto-download + AssemblyAI</li>
-                <li>✅ <strong>Region-locked videos:</strong> Enable "Use India Proxy"</li>
-                <li>✅ <strong>Telugu videos supported</strong> - Auto language detection</li>
-            </ul>
-            
-            <h3>🌐 Proxy Tips</h3>
-            <ul>
-                <li>Enable proxy for Indian videos showing country restriction</li>
-                <li>May take slightly longer to process</li>
-                <li>If proxy fails, download video and upload directly</li>
+                <li>✅ <strong>No Refresh</strong> - Audio generates without page reload</li>
+                <li>✅ <strong>5 Natural Voices</strong> - Clear English, Indian, Telugu, British, Male</li>
+                <li>✅ <strong>All Formats</strong> - Video, Audio, PDF, TXT, URL, YouTube</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
