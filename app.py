@@ -21,6 +21,7 @@ import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 import edge_tts
 import asyncio
+import random
 
 # Download NLTK data
 try:
@@ -90,9 +91,12 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
     }
-    .update-button {
-        background: #28a745;
-        color: white;
+    .error-msg {
+        color: red;
+        padding: 10px;
+        border: 1px solid red;
+        border-radius: 5px;
+        background: #ffe6e6;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -102,8 +106,10 @@ st.markdown("<div class='main-header'><h1>🎯 Universal Summarizer</h1><p>Video
 # Initialize session state
 if 'assemblyai_key' not in st.session_state:
     st.session_state.assemblyai_key = ''
-if 'processed_data' not in st.session_state:
-    st.session_state.processed_data = {}
+if 'processed_texts' not in st.session_state:
+    st.session_state.processed_texts = {}
+if 'audio_cache' not in st.session_state:
+    st.session_state.audio_cache = {}
 
 # Sidebar
 with st.sidebar:
@@ -136,7 +142,8 @@ def extract_pdf_text(pdf_path):
                 if page_text:
                     text += page_text + "\n\n"
         return text, len(pdf_reader.pages)
-    except:
+    except Exception as e:
+        st.error(f"PDF error: {e}")
         return None, 0
 
 def extract_clean_from_url(url):
@@ -147,8 +154,7 @@ def extract_clean_from_url(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 
-                               'form', 'button', 'iframe', 'meta', 'link']):
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
                 element.decompose()
             
             paragraphs = soup.find_all('p')
@@ -159,7 +165,8 @@ def extract_clean_from_url(url):
             
             return text, title
         return None, None
-    except:
+    except Exception as e:
+        st.error(f"URL error: {e}")
         return None, None
 
 def extract_youtube_content(url):
@@ -202,7 +209,8 @@ def extract_youtube_content(url):
                 return description, f"YouTube: {title}"
         
         return None, None
-    except:
+    except Exception as e:
+        st.error(f"YouTube error: {e}")
         return None, None
 
 def transcribe_with_assemblyai(audio_path):
@@ -247,10 +255,15 @@ def transcribe_with_assemblyai(audio_path):
                 return None
         
         return None
-    except:
+    except Exception as e:
+        st.error(f"Transcription error: {e}")
         return None
 
 # ========== TEXT TO SPEECH ==========
+async def generate_edge_tts(text, voice):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save("temp_audio.mp3")
+
 def text_to_speech_normal(text, voice_type="clear"):
     try:
         voices = {
@@ -264,13 +277,9 @@ def text_to_speech_normal(text, voice_type="clear"):
         selected_voice = voices.get(voice_type, "en-US-JennyNeural")
         text_to_speak = text[:1000] if len(text) > 1000 else text
         
-        async def generate():
-            communicate = edge_tts.Communicate(text_to_speak, selected_voice)
-            await communicate.save("temp_audio.mp3")
-        
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(generate())
+        loop.run_until_complete(generate_edge_tts(text_to_speak, selected_voice))
         loop.close()
         
         with open("temp_audio.mp3", "rb") as f:
@@ -280,7 +289,8 @@ def text_to_speech_normal(text, voice_type="clear"):
             os.remove("temp_audio.mp3")
         
         return audio_bytes
-    except:
+    except Exception as e:
+        st.warning(f"Audio failed: {e}")
         return None
 
 # ========== GENERATE SUMMARY ==========
@@ -310,59 +320,49 @@ def generate_summary(text, num_points):
     
     return summary
 
-# ========== DISPLAY RESULTS - NO REFRESH ==========
+# ========== DISPLAY RESULTS - FIXED VERSION ==========
 def display_results(text, source_name):
-    # Create unique ID for this session
-    import random
-    session_id = f"{source_name}_{random.randint(1000, 9999)}"
+    # Create unique ID
+    text_hash = str(hash(text))[:8]
+    session_id = f"{source_name}_{text_hash}"
     
-    # Store text in session state
-    st.session_state[f"text_{session_id}"] = text
+    # Store text
+    st.session_state.processed_texts[session_id] = text
     total_sentences = len(nltk.sent_tokenize(text))
     
-    # Initialize values
-    if f"slider_{session_id}" not in st.session_state:
-        st.session_state[f"slider_{session_id}"] = min(5, total_sentences)
-    if f"voice_{session_id}" not in st.session_state:
-        st.session_state[f"voice_{session_id}"] = "Clear English"
-    if f"summary_{session_id}" not in st.session_state:
-        st.session_state[f"summary_{session_id}"] = generate_summary(text, st.session_state[f"slider_{session_id}"])
+    # Initialize values for this session
+    if f"slider_val_{session_id}" not in st.session_state:
+        st.session_state[f"slider_val_{session_id}"] = min(5, total_sentences)
+    if f"voice_val_{session_id}" not in st.session_state:
+        st.session_state[f"voice_val_{session_id}"] = "Clear English"
     
-    # ===== SLIDER SECTION - NO REFRESH =====
+    # ===== SLIDER =====
     st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2 = st.columns([3, 1])
     
     with col1:
         if total_sentences < 3:
-            st.warning(f"⚠️ Only {total_sentences} sentences")
-            new_value = total_sentences
+            st.warning(f"⚠️ Only {total_sentences} sentence(s)")
+            current_val = total_sentences
         else:
             max_val = min(30, total_sentences)
-            new_value = st.slider(
+            current_val = st.slider(
                 "Number of sentences:",
                 min_value=3,
                 max_value=max_val,
-                value=st.session_state[f"slider_{session_id}"],
+                value=st.session_state[f"slider_val_{session_id}"],
                 key=f"slider_{session_id}"
             )
+            st.session_state[f"slider_val_{session_id}"] = current_val
     
     with col2:
         st.metric("Total", total_sentences)
-    
-    with col3:
-        # Update button - only when clicked
-        if st.button("🔄 Update Summary", key=f"update_{session_id}"):
-            st.session_state[f"slider_{session_id}"] = new_value
-            st.session_state[f"summary_{session_id}"] = generate_summary(
-                st.session_state[f"text_{session_id}"], 
-                new_value
-            )
-            st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # ===== DISPLAY SUMMARY =====
-    summary = st.session_state[f"summary_{session_id}"]
+    # Generate summary
+    summary = generate_summary(text, current_val)
     
+    # ===== DISPLAY SUMMARY =====
     st.markdown("## 📋 Summary")
     st.markdown(f"<div class='section-card'>{summary}</div>", unsafe_allow_html=True)
     
@@ -375,27 +375,24 @@ def display_results(text, source_name):
     with cols[2]:
         st.metric("Sentences", f"{total_sentences:,}")
     with cols[3]:
-        reduction = int((1 - new_value/total_sentences) * 100) if total_sentences > 0 else 0
+        reduction = int((1 - current_val/total_sentences) * 100) if total_sentences > 0 else 0
         st.metric("Reduced", f"{reduction}%")
     
     # ===== AUDIO SECTION =====
     st.markdown("### 🎤 Audio Options")
     
-    # Voice selector
     voice_options = ["Clear English", "Indian English", "Telugu", "British", "American Male"]
-    voice_idx = voice_options.index(st.session_state[f"voice_{session_id}"])
+    voice_index = voice_options.index(st.session_state[f"voice_val_{session_id}"])
     
     selected_voice = st.selectbox(
         "Choose Voice",
         voice_options,
-        index=voice_idx,
-        key=f"voice_{session_id}"
+        index=voice_index,
+        key=f"voice_select_{session_id}"
     )
-    st.session_state[f"voice_{session_id}"] = selected_voice
+    st.session_state[f"voice_val_{session_id}"] = selected_voice
     
-    # Audio buttons
-    col1, col2, col3 = st.columns(3)
-    audio_key = f"audio_{session_id}"
+    col1, col2 = st.columns(2)
     
     with col1:
         if st.button("🎵 Generate Audio", key=f"gen_{session_id}"):
@@ -406,21 +403,18 @@ def display_results(text, source_name):
                 "British": "british",
                 "American Male": "male"
             }
-            with st.spinner("Generating..."):
+            with st.spinner("Generating audio..."):
                 audio = text_to_speech_normal(summary, voice_map[selected_voice])
                 if audio:
-                    st.session_state[audio_key] = audio
-                    st.success("✅ Ready!")
+                    st.session_state[f"audio_{session_id}"] = audio
+                    st.success("✅ Audio ready!")
     
     with col2:
-        if audio_key in st.session_state:
-            st.audio(st.session_state[audio_key], format='audio/mp3')
-    
-    with col3:
-        if audio_key in st.session_state:
+        if f"audio_{session_id}" in st.session_state:
+            st.audio(st.session_state[f"audio_{session_id}"], format='audio/mp3')
             st.download_button(
-                "📥 Download",
-                st.session_state[audio_key],
+                "📥 Download Audio",
+                st.session_state[f"audio_{session_id}"],
                 file_name=f"summary_{source_name}.mp3",
                 mime="audio/mp3",
                 key=f"down_{session_id}"
@@ -429,10 +423,23 @@ def display_results(text, source_name):
     # ===== DOWNLOADS =====
     st.markdown("### 📥 Downloads")
     cols = st.columns(3)
+    
     with cols[0]:
-        st.download_button("📄 Full Text", text, f"{source_name}_full.txt", key=f"full_{session_id}")
+        st.download_button(
+            "📄 Full Text",
+            text,
+            file_name=f"{source_name}_full.txt",
+            key=f"full_{session_id}"
+        )
+    
     with cols[1]:
-        st.download_button("📝 Summary", summary, f"{source_name}_summary.txt", key=f"summ_{session_id}")
+        st.download_button(
+            "📝 Summary",
+            summary,
+            file_name=f"{source_name}_summary.txt",
+            key=f"summ_{session_id}"
+        )
+    
     with cols[2]:
         if st.button("🔗 Share", key=f"share_{session_id}"):
             st.success("✅ Link copied!")
@@ -440,12 +447,13 @@ def display_results(text, source_name):
     # ===== KEYWORDS =====
     words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
     keywords = Counter(words).most_common(10)
-    st.markdown("### 🏷️ Keywords")
-    html = "<div>"
-    for word, count in keywords[:8]:
-        html += f"<span class='keyword-tag'>{word}</span> "
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
+    if keywords:
+        st.markdown("### 🏷️ Keywords")
+        html = "<div>"
+        for word, count in keywords[:8]:
+            html += f"<span class='keyword-tag'>{word}</span> "
+        html += "</div>"
+        st.markdown(html, unsafe_allow_html=True)
 
 # ========== MAIN UI ==========
 def main():
@@ -454,7 +462,8 @@ def main():
     with tab1:
         uploaded_file = st.file_uploader(
             "Choose file",
-            type=['mp4', 'avi', 'mov', 'mp3', 'wav', 'm4a', 'pdf', 'txt']
+            type=['mp4', 'avi', 'mov', 'mp3', 'wav', 'm4a', 'pdf', 'txt'],
+            key="file_uploader"
         )
         
         if uploaded_file:
@@ -467,7 +476,7 @@ def main():
             elif file_ext in ['mp3', 'wav', 'm4a']:
                 st.audio(uploaded_file)
             
-            if st.button("🚀 Process", key="proc_file"):
+            if st.button("🚀 Process", key="process_file"):
                 with st.spinner("Processing..."):
                     with tempfile.NamedTemporaryFile(delete=False) as tmp:
                         tmp.write(uploaded_file.getvalue())
@@ -478,10 +487,12 @@ def main():
                         if text:
                             st.success(f"✅ Extracted {pages} pages")
                             display_results(text, "pdf")
+                    
                     elif file_ext == 'txt':
                         with open(path, 'r', encoding='utf-8') as f:
                             text = f.read()
                         display_results(text, "text")
+                    
                     else:
                         if not st.session_state.assemblyai_key:
                             st.error("❌ AssemblyAI Key required")
@@ -494,7 +505,7 @@ def main():
                     os.unlink(path)
     
     with tab2:
-        url = st.text_input("Enter URL", placeholder="https://...")
+        url = st.text_input("Enter URL", placeholder="https://...", key="url_input")
         if url and st.button("🌐 Fetch", key="fetch_url"):
             if 'youtube.com' in url or 'youtu.be' in url:
                 with st.spinner("Fetching YouTube..."):
@@ -502,22 +513,26 @@ def main():
                     if text:
                         st.success(f"✅ {title}")
                         display_results(text, "youtube")
+                    else:
+                        st.warning("No content found")
             elif validators.url(url):
                 with st.spinner("Fetching..."):
                     text, title = extract_clean_from_url(url)
                     if text:
                         st.success(f"✅ {title}")
                         display_results(text, "web")
+                    else:
+                        st.warning("No content found")
             else:
                 st.error("❌ Invalid URL")
     
     with tab3:
-        text_input = st.text_area("Paste text", height=200)
-        if text_input and st.button("📝 Summarize", key="summ_text"):
+        text_input = st.text_area("Paste text", height=200, key="text_area")
+        if text_input and st.button("📝 Summarize", key="summarize_text"):
             if len(text_input) > 100:
                 display_results(text_input, "pasted")
             else:
-                st.warning("Text too short")
+                st.warning("Text too short (min 100 chars)")
     
     with tab4:
         st.markdown("""
@@ -525,16 +540,17 @@ def main():
             <h3>📌 How to Use</h3>
             <ol>
                 <li>Get AssemblyAI Key from assemblyai.com</li>
-                <li>Upload file or paste URL</li>
+                <li>Upload file, paste URL, or enter text</li>
                 <li>Adjust slider for summary length</li>
-                <li>Click <strong>"Update Summary"</strong> to apply changes</li>
-                <li>Generate audio and download</li>
+                <li>Select voice and click Generate Audio</li>
+                <li>Download text/summary/audio</li>
             </ol>
-            <h3>✅ No Refresh Features</h3>
+            <h3>✅ Features</h3>
             <ul>
-                <li>Slider changes don't auto-refresh</li>
-                <li>Voice selection doesn't auto-refresh</li>
-                <li>Click "Update Summary" to apply</li>
+                <li>No refresh on slider/voice change</li>
+                <li>5 natural voices</li>
+                <li>All formats supported</li>
+                <li>Fixed session state errors</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
