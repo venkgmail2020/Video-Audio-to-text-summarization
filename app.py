@@ -321,13 +321,13 @@ def generate_summary(text, num_points):
     if len(sentences) <= num_points:
         return text
     
-    words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
+    words = re.findall(r'\b[a-zA-Z]{9,}\b', text.lower())
     word_freq = Counter(words)
     stop_words = set(nltk.corpus.stopwords.words('english'))
     
     sentence_scores = {}
     for i, sent in enumerate(sentences):
-        sent_words = re.findall(r'\b[a-zA-Z]{4,}\b', sent.lower())
+        sent_words = re.findall(r'\b[a-zA-Z]{9,}\b', sent.lower())
         score = sum(word_freq.get(word, 0) for word in sent_words if word not in stop_words)
         if 20 < len(sent) < 300:
             sentence_scores[i] = score
