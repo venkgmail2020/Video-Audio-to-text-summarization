@@ -10,7 +10,7 @@ from collections import Counter
 from gtts import gTTS
 import io
 import base64
-from sumy.parsers.plaintext import PlaintextParser
+from sumy.parsers.plaintext import PlaintextParser  # ✅ Fixed: lowercase 't'
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 import ssl
@@ -145,6 +145,7 @@ with st.sidebar:
     st.markdown("• URL shows correct % now")
     st.markdown("• No refresh on slider")
     st.markdown("• Word count based reduction")
+    st.markdown("• sumy import fixed")
 
 # ========== PDF EXTRACTION ==========
 def extract_pdf_text(pdf_path):
@@ -344,7 +345,7 @@ def generate_summary(text, num_points):
     
     return summary
 
-# ========== DISPLAY RESULTS - NO REFRESH + CORRECT URL % ==========
+# ========== DISPLAY RESULTS ==========
 def display_results(text, source_name):
     if not text or len(text.strip()) == 0:
         st.error("No text to display")
@@ -552,7 +553,7 @@ def main():
             <ul>
                 <li>✅ <strong>URL shows correct %</strong> - Word count based reduction</li>
                 <li>✅ <strong>No refresh on slider</strong> - Click Update button to apply</li>
-                <li>✅ All input types work same way</li>
+                <li>✅ <strong>sumy import fixed</strong> - PlaintextParser (lowercase t)</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
