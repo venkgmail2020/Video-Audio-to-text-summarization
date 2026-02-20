@@ -36,7 +36,7 @@ except:
     nltk.download('stopwords')
     nltk.download('punkt_tab')
 
-st.set_page_config(page_title="Universal Summarizer", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Text Summarizer Using NLP", page_icon="📝", layout="wide")
 
 # Custom CSS
 st.markdown("""
@@ -94,7 +94,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-header'><h1>🎯 Universal Summarizer</h1><p>Video | Audio | PDF | Text | URL | YouTube</p></div>", unsafe_allow_html=True)
+st.markdown("<div class='main-header'><h1>📝 Text Summarizer Using NLP</h1><p>Video | Audio | PDF | Text | URL | YouTube</p></div>", unsafe_allow_html=True)
 
 # Initialize session state
 if 'assemblyai_key' not in st.session_state:
@@ -350,23 +350,24 @@ def generate_summary(text, num_points=5):
     
     return summary, len(sentences)
 
-# ========== DISPLAY RESULTS WITH FIXED SLIDER ==========
+# ========== DISPLAY RESULTS WITH FIXED SLIDER AND REDUCTION ==========
 def display_results(text, source_name):
     # Sentence count
     total_sentences = len(nltk.sent_tokenize(text))
     
-    # Slider for summary length - FIXED VERSION
+    # Calculate word counts for reduction percentage
+    original_words = len(text.split())
+    
+    # Slider for summary length
     st.markdown("<div class='slider-container'>", unsafe_allow_html=True)
     col1, col2 = st.columns([3, 1])
     with col1:
-        # Handle very short texts (like YouTube descriptions)
+        # Handle very short texts
         if total_sentences < 3:
             st.warning(f"⚠️ Text has only {total_sentences} sentence(s). Showing full text.")
             num_summary_sentences = total_sentences
-            # Disable slider by showing info instead
             st.info(f"📝 Using all {total_sentences} sentences")
         else:
-            # Calculate safe values
             max_slider = min(30, total_sentences)
             min_slider = 3
             default_val = min(5, max_slider)
@@ -384,29 +385,32 @@ def display_results(text, source_name):
     
     # Generate summary with selected length
     if total_sentences < 3:
-        # For very short texts, just show the text itself
         summary = f"📌 **FULL TEXT ({total_sentences} sentences)**\n\n{text}"
         used_sentences = total_sentences
+        summary_words = original_words
     else:
         summary, used_sentences = generate_summary(text, num_summary_sentences)
+        summary_words = len(summary.split())
     
     st.markdown("## 📋 Summary")
     st.markdown(f"<div class='section-card'>{summary}</div>", unsafe_allow_html=True)
     
-    # Statistics
+    # Calculate reduction percentage (FIXED)
+    if original_words > 0:
+        reduction = int((1 - summary_words/original_words) * 100)
+    else:
+        reduction = 0
+    
+    # Statistics with correct reduction
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Characters", f"{len(text):,}")
     with col2:
-        st.metric("Words", f"{len(text.split()):,}")
+        st.metric("Words", f"{original_words:,}")
     with col3:
         st.metric("Sentences", f"{total_sentences:,}")
     with col4:
-        if total_sentences > 0:
-            reduction = int((1 - used_sentences/total_sentences) * 100)
-        else:
-            reduction = 0
-        st.metric("Reduced", f"{reduction}%")
+        st.metric("Reduced", f"{reduction}%")  # Now shows correct percentage
     
     # Download section
     st.markdown("### 📥 Downloads")
@@ -538,7 +542,7 @@ def main():
                 <li>✅ <strong>YouTube Support</strong> - Extracts captions/description</li>
                 <li>✅ <strong>Clean URLs</strong> - No footer/copyright text</li>
                 <li>✅ <strong>Sentence slider</strong> - Control summary length</li>
-                <li>✅ <strong>Fixed slider error</strong> - Handles short texts</li>
+                <li>✅ <strong>Fixed reduction percentage</strong> - Shows correct value</li>
                 <li>✅ <strong>All formats</strong> - Video, Audio, PDF, TXT, URL</li>
             </ul>
             
